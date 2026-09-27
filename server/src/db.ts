@@ -1,7 +1,7 @@
 import { Pool } from 'pg';
 import { readFileSync } from 'node:fs';
 
-function clientCertificateSsl() {
+export function clientCertificateSsl() {
   const certPath = process.env.PGSSLCERT;
   const keyPath = process.env.PGSSLKEY;
 
