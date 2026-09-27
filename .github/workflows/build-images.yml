@@ -1,0 +1,147 @@
+name: Sync, validate and publish Nexum
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [builds]
+
+permissions:
+  contents: read
+
+# Serialize sync and promotion. A newer push never cancels a partial promotion.
+concurrency:
+  group: nexum-images
+  cancel-in-progress: false
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      build: ${{ steps.source.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fast-forward clean upstream and select source
+        id: source
+        env:
+          SOURCE_BRANCH: ${{ vars.SOURCE_BRANCH || 'upstream-sync' }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: bash scripts/resolve-source.sh
+
+  validate:
+    needs: source
+    if: needs.source.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: nexum
+          POSTGRES_PASSWORD: nexum-ci-only
+          POSTGRES_DB: eve_nexum_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U nexum -d eve_nexum_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      PG_HOST: localhost
+      PG_PORT: 5432
+      PG_DB: eve_nexum_test
+      PG_USER: nexum
+      PG_PASSWORD: nexum-ci-only
+      SOURCE_SHA: ${{ needs.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: automation
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install pinned Yarn
+        run: npm install --global yarn@1.22.22
+      - name: Server typecheck and unit/integration tests
+        working-directory: source/server
+        run: |
+          yarn install --frozen-lockfile
+          node -e 'const {Client}=require("pg"); const c=new Client({host:process.env.PG_HOST,port:Number(process.env.PG_PORT),database:process.env.PG_DB,user:process.env.PG_USER,password:process.env.PG_PASSWORD}); c.connect().then(()=>c.end()).catch(e=>{console.error(e);process.exit(1)})'
+          yarn build
+          yarn test
+      - name: Web lint and unit tests
+        working-directory: source/web
+        run: |
+          yarn install --frozen-lockfile
+          yarn lint
+          yarn test
+      - uses: docker/setup-buildx-action@v3
+      - name: Build server
+        uses: docker/build-push-action@v6
+        with:
+          context: source/server
+          load: true
+          platforms: linux/amd64
+          tags: nexum-server:tested
+          labels: |
+            org.opencontainers.image.source=https://github.com/renab/eve-nexum
+            org.opencontainers.image.revision=${{ needs.source.outputs.sha }}
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,scope=server,mode=max
+      - name: Build web
+        uses: docker/build-push-action@v6
+        with:
+          context: source/web
+          load: true
+          platforms: linux/amd64
+          tags: nexum-web:tested
+          labels: |
+            org.opencontainers.image.source=https://github.com/renab/eve-nexum
+            org.opencontainers.image.revision=${{ needs.source.outputs.sha }}
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+      - name: Smoke-test built containers together
+        run: bash automation/scripts/smoke.sh
+      - name: Save the exact tested images
+        run: docker save nexum-server:tested nexum-web:tested | gzip > tested-images.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tested-images
+          path: tested-images.tar.gz
+          retention-days: 1
+          compression-level: 0
+
+  publish:
+    needs: [source, validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      packages: write
+    env:
+      SOURCE_SHA: ${{ needs.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: tested-images
+      - run: gunzip -c tested-images.tar.gz | docker load
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Publish immutable tags, then promote the tested pair
+        run: bash scripts/publish.sh
