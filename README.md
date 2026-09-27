@@ -57,14 +57,16 @@ No PAT or custom secret is required. The source job gets `contents: write`,
 validation gets `contents: read`, and publishing gets `contents: write` plus
 `packages: write`, using the built-in `GITHUB_TOKEN`. Keep Actions enabled.
 
-GitHub creates GHCR packages **private** by default, even for a public repo.
-After the first successful publish, open each package's settings and change its
-visibility to **Public** for anonymous cluster pulls:
+Both packages were verified anonymously pullable after the
+[first successful run](https://github.com/renab/eve-nexum/actions/runs/36282871805).
+**No manual GitHub approval or visibility change is currently required.** If a
+package is recreated or its permissions change, check that its visibility is
+**Public** for anonymous cluster pulls (new GHCR packages may default private):
 
 - [nexum-server settings](https://github.com/users/renab/packages/container/nexum-server/settings)
 - [nexum-web settings](https://github.com/users/renab/packages/container/nexum-web/settings)
 
-Until then, authenticated package pulls are required. Ensure this repository
+Private packages require authenticated pulls. Ensure this repository
 retains Actions write access to both packages (OCI source labels link them).
 GitHub can disable scheduled workflows in inactive public repositories after
 60 days; check Actions if updates stop and re-enable the workflow as needed.
