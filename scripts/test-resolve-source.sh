@@ -6,6 +6,14 @@
 #        patch preservation, concurrent push rejection.
 set -euo pipefail
 
+# ── Test-only Git identity (independent of global config) ─────────────────
+# These must match what resolve-source.sh derives from GITHUB_ACTOR="test-ci"
+# so the merge-commit author check (Test 1) passes.
+export GIT_AUTHOR_NAME="test-ci"
+export GIT_AUTHOR_EMAIL="test-ci@users.noreply.github.com"
+export GIT_COMMITTER_NAME="test-ci"
+export GIT_COMMITTER_EMAIL="test-ci@users.noreply.github.com"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOLVE_SCRIPT="$SCRIPT_DIR/resolve-source.sh"
 
