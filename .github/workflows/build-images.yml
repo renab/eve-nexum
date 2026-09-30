@@ -27,6 +27,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Validate resolve-source against local bare remotes
+        run: bash scripts/test-resolve-source.sh
       - name: Fast-forward clean upstream and select source
         id: source
         env:

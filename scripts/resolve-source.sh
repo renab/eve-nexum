@@ -1,8 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Deterministic git identity for CI-generated merge commits.
+export GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-${GITHUB_ACTOR:-CI Auto-Merge}}"
+if [[ -n "${GITHUB_ACTOR:-}" ]]; then
+  export GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-${GITHUB_ACTOR}@users.noreply.github.com}"
+else
+  export GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-ci@eve-nexum.automation}"
+fi
+export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+
 git check-ref-format "refs/heads/$SOURCE_BRANCH"
-git remote add upstream https://github.com/GQuantrill/eve-nexum.git
+
+# Allow upstream URL override for testing with local bare remotes.
+UPSTREAM="${UPSTREAM_URL:-https://github.com/GQuantrill/eve-nexum.git}"
+git remote add upstream "$UPSTREAM" 2>/dev/null || git remote set-url upstream "$UPSTREAM"
 git fetch --no-tags upstream main
 upstream_sha=$(git rev-parse FETCH_HEAD)
 old=$(git ls-remote --heads origin refs/heads/upstream-sync | cut -f1)
@@ -37,6 +50,13 @@ else
       exit 1
     fi
     merged_sha=$(git rev-parse HEAD)
+
+    # Test hook: pause before push so test can advance remote (concurrent push rejection).
+    if [[ -n "${TEST_PUSH_HOOK:-}" && -f "$TEST_PUSH_HOOK" ]]; then
+      trap 'rm -f "$TEST_PUSH_HOOK"' EXIT
+      _hook_start=$SECONDS
+      while [[ -f "$TEST_PUSH_HOOK" ]] && (( SECONDS - _hook_start < 30 )); do sleep 0.05; done
+    fi
 
     # Push non-force: fail if the remote advanced concurrently.
     if ! git push origin "local-$SOURCE_BRANCH:refs/heads/$SOURCE_BRANCH"; then
