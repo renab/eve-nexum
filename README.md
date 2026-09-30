@@ -41,13 +41,14 @@ revisions. Rerun the workflow to finish. The success marker is written only afte
 both pushes. Scheduled runs skip a successful source/automation pair and retry
 failed pairs. Manual runs revalidate even an unchanged source.
 
-## Future local patches
+## Local patches
 
-Keep `upstream-sync` pristine. Create a `patches` branch from it, commit application
-patches there, and set the repository Actions variable `SOURCE_BRANCH=patches`.
-The workflow then builds that branch's exact commit. When upstream moves, merge
-`upstream-sync` into `patches` and resolve/test conflicts normally. Publishing
-stops until that branch includes current upstream; local patches are never reset.
+Keep `upstream-sync` pristine. Create a `patches` branch from it, commit
+application patches there, and set the repository Actions variable
+`SOURCE_BRANCH=patches`. The workflow then builds that branch's exact commit.
+When upstream moves, the workflow automatically merges `upstream-sync` into
+`patches` before building; conflicts require manual resolution. Publishing
+stops until patches includes current upstream; local patches are never reset.
 Remove the variable to return to unmodified upstream. Use manual dispatch after
 pushing patches, or wait for the next hourly check.
 
