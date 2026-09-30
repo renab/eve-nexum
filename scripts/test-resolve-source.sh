@@ -6,13 +6,9 @@
 #        patch preservation, concurrent push rejection.
 set -euo pipefail
 
-# ── Test-only Git identity (independent of global config) ─────────────────
-# These must match what resolve-source.sh derives from GITHUB_ACTOR="test-ci"
-# so the merge-commit author check (Test 1) passes.
-export GIT_AUTHOR_NAME="test-ci"
-export GIT_AUTHOR_EMAIL="test-ci@users.noreply.github.com"
-export GIT_COMMITTER_NAME="test-ci"
-export GIT_COMMITTER_EMAIL="test-ci@users.noreply.github.com"
+# ── Helpers (Git identity scoped to fixture creation only) ───────────────
+# Production run_resolve() must NOT inherit these; it unsets them so that
+# resolve-source.sh's own GITHUB_ACTOR defaults are exercised.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOLVE_SCRIPT="$SCRIPT_DIR/resolve-source.sh"
@@ -39,6 +35,10 @@ setup_upstream() {
   git clone "$dir" "$wt" >/dev/null 2>&1
   (
     cd "$wt"
+    export GIT_AUTHOR_NAME="test-ci"
+    export GIT_AUTHOR_EMAIL="test-ci@users.noreply.github.com"
+    export GIT_COMMITTER_NAME="test-ci"
+    export GIT_COMMITTER_EMAIL="test-ci@users.noreply.github.com"
     git checkout -b main >/dev/null 2>&1
     echo "initial" > file.txt
     git add file.txt
@@ -77,6 +77,10 @@ add_branch_commits() {
   git clone "$repo" "$wt" >/dev/null 2>&1
   (
     cd "$wt"
+    export GIT_AUTHOR_NAME="test-ci"
+    export GIT_AUTHOR_EMAIL="test-ci@users.noreply.github.com"
+    export GIT_COMMITTER_NAME="test-ci"
+    export GIT_COMMITTER_EMAIL="test-ci@users.noreply.github.com"
     git checkout -b "$branch" 2>/dev/null || git checkout "$branch" >/dev/null 2>&1
     for i in $(seq 1 "$count"); do
       echo "${prefix}-$i" >> "$file"
@@ -91,6 +95,8 @@ add_branch_commits() {
 # ── Helper: run resolve-source.sh against origin bare repo ──────────────
 # upstream_bare is used as the UPSTREAM_URL override.
 # Stores exit code in $TMPDIR_BASE/last-rc. Echoes clone path to stdout.
+# Explicitly unsets GIT_AUTHOR/COMMITTER so the production script's own
+# GITHUB_ACTOR-derived defaults are exercised (not inherited from test env).
 run_resolve() {
   local origin_url="$1" source_branch="$2" upstream_url="$3"
   local event_name="${4:-manual}" github_sha="${5:-test00000000000000000000000000000000000000}"
@@ -108,6 +114,10 @@ run_resolve() {
     GITHUB_SHA="$github_sha" \
     GITHUB_OUTPUT="$output_file" \
     GITHUB_ACTOR="test-ci" \
+    GIT_AUTHOR_NAME= \
+    GIT_AUTHOR_EMAIL= \
+    GIT_COMMITTER_NAME= \
+    GIT_COMMITTER_EMAIL= \
     bash "$RESOLVE_SCRIPT" >&2
   ); then
     echo "1" > "$TMPDIR_BASE/last-rc"
@@ -186,12 +196,25 @@ for msg in "patch commit 1" "patch commit 2" "upstream commit 1" "upstream commi
   fi
 done
 
-# Verify deterministic git identity on merge commit
+# Verify deterministic git identity on merge commit (author AND committer)
 merge_author=$(git -C "$CLONE" log -1 --format='%an <%ae>' HEAD)
 if [[ "$merge_author" == "test-ci <test-ci@users.noreply.github.com>" ]]; then
   pass "merge commit has deterministic author identity"
 else
   fail "merge commit author unexpected: '$merge_author'"
+fi
+merge_committer=$(git -C "$CLONE" log -1 --format='%cn <%ce>' HEAD)
+if [[ "$merge_committer" == "test-ci <test-ci@users.noreply.github.com>" ]]; then
+  pass "merge commit has deterministic committer identity"
+else
+  fail "merge commit committer unexpected: '$merge_committer'"
+fi
+
+# Assert GITHUB_OUTPUT sha equals the actual remote patches ref SHA
+if [[ "$output_sha" == "$post_patches" ]]; then
+  pass "GITHUB_OUTPUT sha matches remote patches ref"
+else
+  fail "GITHUB_OUTPUT sha ($output_sha) != remote patches ref ($post_patches)"
 fi
 
 ##############################################################################
@@ -210,6 +233,10 @@ git -C "$ORIGIN_BARE" update-ref refs/heads/upstream-sync "$(git -C "$UPSTREAM_B
 (
   git clone "$ORIGIN_BARE" "$TMPDIR_BASE/t2-patches-wt" >/dev/null 2>&1
   cd "$TMPDIR_BASE/t2-patches-wt"
+  export GIT_AUTHOR_NAME="test-ci"
+  export GIT_AUTHOR_EMAIL="test-ci@users.noreply.github.com"
+  export GIT_COMMITTER_NAME="test-ci"
+  export GIT_COMMITTER_EMAIL="test-ci@users.noreply.github.com"
   git checkout -b patches main >/dev/null 2>&1
   git fetch origin upstream-sync >/dev/null 2>&1
   git merge --no-edit origin/upstream-sync >/dev/null 2>&1
@@ -287,6 +314,10 @@ ORIGIN_BARE=$(setup_origin t4 "$UPSTREAM_BARE")
 (
   git clone "$ORIGIN_BARE" "$TMPDIR_BASE/t4-patches-wt" >/dev/null 2>&1
   cd "$TMPDIR_BASE/t4-patches-wt"
+  export GIT_AUTHOR_NAME="test-ci"
+  export GIT_AUTHOR_EMAIL="test-ci@users.noreply.github.com"
+  export GIT_COMMITTER_NAME="test-ci"
+  export GIT_COMMITTER_EMAIL="test-ci@users.noreply.github.com"
   git checkout -b patches main >/dev/null 2>&1
   echo "fix-a" > fix-a.txt && git add fix-a.txt && git commit -m "PATCH: fix A" >/dev/null 2>&1
   echo "fix-b" > fix-b.txt && git add fix-b.txt && git commit -m "PATCH: fix B" >/dev/null 2>&1
@@ -322,7 +353,7 @@ fi
 ##############################################################################
 echo ""
 echo "=== Test 5: Concurrent push rejection ==="
-echo "  Remote advances between merge and push via test hook."
+echo "  Remote advances between merge and push via explicit readiness handshake."
 echo "  Expect: push fails, script exits non-zero."
 
 UPSTREAM_BARE=$(setup_upstream t5 2 upstream)
@@ -334,23 +365,49 @@ add_branch_commits "$ORIGIN_BARE" patches 1 race-patch patch-file.txt
 pre_patches=$(remote_ref_sha "$ORIGIN_BARE" patches)
 
 # Test hook: resolve-source.sh pauses before push while HOOK_FILE exists.
+# It also creates HOOK_FILE.ready to signal the watcher.
 HOOK_FILE="$TMPDIR_BASE/t5-push-hook"
 : > "$HOOK_FILE"
 export TEST_PUSH_HOOK="$HOOK_FILE"
 
-# Background watcher: wait, create concurrent commit, push to origin.
+# Status file: watcher writes its exit code here.
+WATCHER_STATUS="$TMPDIR_BASE/t5-watcher-status"
+: > "$WATCHER_STATUS"
+
+# Background watcher: wait for .ready signal, then push concurrent patch.
 (
-  trap 'rm -f "$HOOK_FILE"' EXIT
-  sleep 3
+  # Wait for production script to signal it's about to push
+  _ready_wait=0
+  while [[ ! -f "${HOOK_FILE}.ready" ]] && (( _ready_wait < 30 )); do
+    sleep 0.05
+    _ready_wait=$(( _ready_wait + 1 ))
+  done
+  if [[ ! -f "${HOOK_FILE}.ready" ]]; then
+    echo "timeout-waiting-for-ready" > "$WATCHER_STATUS"
+    exit 1
+  fi
+
+  # Production script is about to push — advance the remote patches ref
   RACER="$TMPDIR_BASE/t5-racer"
   rm -rf "$RACER"
   git clone "$ORIGIN_BARE" "$RACER" >/dev/null 2>&1
   cd "$RACER"
+  export GIT_AUTHOR_NAME="test-ci"
+  export GIT_AUTHOR_EMAIL="test-ci@users.noreply.github.com"
+  export GIT_COMMITTER_NAME="test-ci"
+  export GIT_COMMITTER_EMAIL="test-ci@users.noreply.github.com"
   git checkout -b patches origin/patches >/dev/null 2>&1
   echo "concurrent" > race.txt && git add race.txt
   git commit -m "concurrent commit" >/dev/null 2>&1
-  # Push to origin (bare repo) to advance the patches ref
-  git push origin patches >/dev/null 2>&1
+  if git push origin patches >/dev/null 2>&1; then
+    echo "success" > "$WATCHER_STATUS"
+  else
+    echo "push-failed" > "$WATCHER_STATUS"
+    exit 1
+  fi
+
+  # Remove hook file so production script can resume and attempt its push
+  rm -f "$HOOK_FILE"
 ) &
 WATCHER_PID=$!
 
@@ -358,8 +415,16 @@ CLONE=$(run_resolve "$ORIGIN_BARE" patches "$UPSTREAM_BARE" manual)
 rc=$(cat "$TMPDIR_BASE/last-rc")
 unset TEST_PUSH_HOOK
 
-rm -f "$HOOK_FILE"
-wait "$WATCHER_PID" 2>/dev/null || true
+# Wait for watcher and check its status
+wait "$WATCHER_PID" 2>/dev/null
+watcher_rc=$?
+watcher_status=$(cat "$WATCHER_STATUS")
+
+if [[ "$watcher_status" == "success" ]]; then
+  pass "concurrent racer succeeded (status=$watcher_status)"
+else
+  fail "concurrent racer failed (status=$watcher_status, rc=$watcher_rc)"
+fi
 
 if [[ "$rc" != "0" ]]; then
   pass "resolve-source.sh exited non-zero ($rc) on concurrent push"

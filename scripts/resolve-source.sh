@@ -52,8 +52,10 @@ else
     merged_sha=$(git rev-parse HEAD)
 
     # Test hook: pause before push so test can advance remote (concurrent push rejection).
+    # Creates a .ready signal file so the test watcher knows the script is about to push.
     if [[ -n "${TEST_PUSH_HOOK:-}" && -f "$TEST_PUSH_HOOK" ]]; then
       trap 'rm -f "$TEST_PUSH_HOOK"' EXIT
+      touch "${TEST_PUSH_HOOK}.ready"
       _hook_start=$SECONDS
       while [[ -f "$TEST_PUSH_HOOK" ]] && (( SECONDS - _hook_start < 30 )); do sleep 0.05; done
     fi
