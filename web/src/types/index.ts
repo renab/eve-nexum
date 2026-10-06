@@ -31,6 +31,21 @@ export interface CustomIntel {
   color: string;
 }
 
+/**
+ * A saved connection-flag template: apply it and the connection gets this icon,
+ * colour and note in one click, after which the note stays editable.
+ *
+ * The bounds mirror the ones the connection PATCH enforces (icon <= 64, name
+ * <= 200 since it lands in flagNote, colour a plain #rrggbb) -- a preset that
+ * breaks them would save fine and then fail every time anyone applied it.
+ */
+export interface FlagPreset {
+  id:    string;
+  name:  string;
+  icon:  string;
+  color: string;
+}
+
 /** A user's personal "holes I'm hunting" watchlist. Stored per-user (not per
  *  map) so it follows them everywhere. `marker` picks the icon/colour/cue from
  *  WATCH_MARKERS. */
@@ -125,6 +140,11 @@ export interface Signature {
   timeStatus: TimeStatus | '';
   createdAt: string;
   updatedAt: string;
+  /** Who scanned it. Null for rows created before attribution existed, and for
+   *  a user who has since been deleted — the column is ON DELETE SET NULL, so
+   *  the signature outlives the account. Treat absence as "nobody knows". */
+  createdByName?: string | null;
+  createdByCharId?: number | string | null;
 }
 
 // Cosmic anomalies are only ever "Combat Site" or "Ore Site" on the probe
@@ -140,6 +160,11 @@ export interface Anomaly {
   notes: string;
   createdAt: string;
   updatedAt: string;
+  /** Who scanned it. Null for rows created before attribution existed, and for
+   *  a user who has since been deleted — the column is ON DELETE SET NULL, so
+   *  the signature outlives the account. Treat absence as "nobody knows". */
+  createdByName?: string | null;
+  createdByCharId?: number | string | null;
 }
 
 export type StructureType =

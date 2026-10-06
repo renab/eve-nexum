@@ -43,7 +43,8 @@
   "activity": {
     "thisHour": "this hour",
     "allHidden": "All charts hidden. Toggle them on in Map Options → Activity.",
-    "loading": "Loading activity…"
+    "loading": "Loading activity…",
+    "peak": "peak {{value}}"
   },
   "addSystem": {
     "title": "Add System",
@@ -84,7 +85,9 @@
       "maps": "Maps",
       "reports": "Reports",
       "discord": "Discord",
-      "audit": "Audit log"
+      "audit": "Audit log",
+      "flags": "Flag presets",
+      "defaults": "Default layout"
     },
     "access": {
       "title": "Login access",
@@ -362,6 +365,35 @@
       "colAmount": "Amount",
       "assign": "Assign",
       "assignPlaceholder": "Character ID"
+    },
+    "flags": {
+      "title": "Flag presets",
+      "hintCorp": "Presets every member of your corporation sees above their own, so a badge means the same thing to everyone. Up to {{max}}.",
+      "hintAlliance": "Presets every member of your alliance sees above their own, so a badge means the same thing to everyone. Up to {{max}}.",
+      "noCorp": "This deployment has no corporation or alliance, so there is nobody to standardise with.",
+      "saving": "Saving…",
+      "saved": "Saved",
+      "loadFailed": "Couldn't load the presets.",
+      "saveFailed": "Couldn't save the presets."
+    },
+    "defaults": {
+      "title": "Default layout",
+      "hintCorp": "The configuration every member of your corporation starts from. Arrange your own layout how you want it, then capture it here.",
+      "hintAlliance": "The configuration every member of your alliance starts from. Arrange your own layout how you want it, then capture it here.",
+      "limitExisting": "Members inherit any setting they have never changed themselves. Anything they have already set stays theirs. Panel order, zoom and the other display options apply to new members only.",
+      "limitSession": "Members already signed in pick up a change next time they sign in.",
+      "noCorp": "This deployment has no corporation or alliance, so there is nobody to set defaults for.",
+      "none": "No defaults set yet.",
+      "summary": "{{count}} settings captured",
+      "lastSet": "Last set by {{who}} on {{when}}",
+      "showList": "Show what this includes",
+      "hideList": "Hide the list",
+      "capture": "Save my current layout as the default",
+      "clear": "Clear defaults",
+      "saving": "Saving…",
+      "saved": "Saved",
+      "loadFailed": "Couldn't load the defaults.",
+      "saveFailed": "Couldn't save the defaults."
     }
   },
   "anomType": {
@@ -443,13 +475,18 @@
     "disabled": "API keys disabled"
   },
   "chainExits": {
+    "title": "Chain exits",
     "noExits": "No K-space exits in this chain.",
     "hint": "K-space systems currently on the map, by security class. Jita route is gates-only — wormhole shortcuts not counted.",
+    "allExits": "All K-space exits",
+    "noFavourites": "No favourite systems yet — add some in the Closest Systems panel.",
+    "noRoute": "no route",
+    "inChain": "in chain",
+    "via": "via",
     "highSec": "High-sec",
     "lowSec": "Low-sec",
     "nullSec": "Null-sec",
-    "nearestJita": "Nearest Jita:",
-    "via": "via"
+    "nearestJita": "Nearest Jita:"
   },
   "chains": {
     "from": "From…",
@@ -695,6 +732,7 @@
     "removeSystem": "Remove System",
     "connectTo": "Connect to system…",
     "connectToHint": "Click the system to connect {{system}} to — Esc to cancel",
+    "addConnected": "Add connected system…",
     "connectToDone": "Connected {{from}} to {{to}}",
     "removeSystems": "Remove {{count}} Systems",
     "removeOrphans": "Remove Orphan Systems ({{count}})",
@@ -713,7 +751,8 @@
     "canvasHint": "Right-click canvas to add system · Drag between handles to connect · Shift or ⌘/Ctrl+click, or drag, to multi-select · Right click system to interact",
     "jumpRangeFrom": "Jump range from here",
     "jumpCyno": "Cyno Jump",
-    "jumpRangeClear": "Clear jump range"
+    "jumpRangeClear": "Clear jump range",
+    "copyName": "Copy system name"
   },
   "customIntel": {
     "title": "Custom Intel",
@@ -1330,6 +1369,8 @@
   },
   "mapSidebar": {
     "activityHint": "Show graphs for the following:",
+    "activityCombined": "Combine into one graph",
+    "activityCombinedHint": "One set of axes for all metrics, each scaled to its own 24h peak. Exact values appear on hover.",
     "activityJumps": "Jumps",
     "activityNpcDelta": "NPC Delta",
     "activityNpcKills": "NPC Kills",
@@ -1395,6 +1436,13 @@
     "fleetHeatmap": "Fleet heatmap",
     "fleetHint": "Render fleet-mates as purple dots on the system they're in. Hover a dot to see the names.",
     "fontSize": "Font Size",
+    "density": "Interface density",
+    "densityHint": "Spacing around panel text. Font size is separate, so you can keep large text in tighter chrome.",
+    "densityOptions": {
+      "comfortable": "Comfortable",
+      "compact": "Compact",
+      "dense": "Dense"
+    },
     "heatIntensity": "Intensity",
     "heatmap": "Heatmap",
     "heatmapOptions": {
@@ -1477,6 +1525,7 @@
     "panelBelow": "Below map",
     "panelBeside": "Beside map",
     "panelLayout": "Panel layout",
+    "panelLayoutTooltip": "Where the system panel sits: beneath the map, or beside it as a tall column on the right.",
     "patchNotesEmpty": "No patch notes yet.",
     "patchNotesFailed": "Couldn't load patch notes.",
     "patchNotesNoNotes": "No notes for this release.",
@@ -1527,7 +1576,6 @@
       "tracking": "Tracking",
       "route": "Route",
       "chains": "Chains",
-      "chainExits": "Chain Exits",
       "proximityAlerts": "Proximity Alerts",
       "notifications": "Notifications",
       "activity": "Activity",
@@ -1539,7 +1587,8 @@
       "shareMap": "Share Map",
       "shortcuts": "Shortcuts",
       "announcer": "Announcer",
-      "jumpRange": "Jump Range"
+      "jumpRange": "Jump Range",
+      "chainExits": "Chain Exits"
     },
     "settings": "Settings",
     "shareActiveHint": "Live share link. Toggle below to change what guests see. If a link was previously generated, the changes will take effect automatically and you DO NOT need to regenerate.",
@@ -1592,7 +1641,9 @@
     "updateShareFailed": "Failed to update share options",
     "version": "Version",
     "wandererImported": "Imported from Wanderer: {{systems}} systems, {{connections}} connections ({{skipped}} skipped).",
-    "working": "Working…"
+    "working": "Working…",
+    "panelColumns": "Panel columns",
+    "panelColumnsTooltip": "Splits the panel's panes into side-by-side columns, so notes or the killboard can sit beside signatures instead of below them."
   },
   "mass": {
     "billionKg": "{{value}} B kg",
@@ -1746,7 +1797,8 @@
     "panelsTitle": "Sidebar sections",
     "panelsHint": "Choose which sections appear in the sidebar. Hidden ones keep their place, so switching one back on returns it to where you had it.",
     "panelsAllHidden": "Every section is hidden — the sidebar will be empty.",
-    "emptyTitle": "No sections are showing. Choose which ones you want here."
+    "emptyTitle": "No sections are showing. Choose which ones you want here.",
+    "routePlanner": "Route Planner"
   },
   "sigType": {
     "combat": "Combat",
@@ -1803,7 +1855,10 @@
     "colSafe": "Safe",
     "safeYes": "Safe — no combat",
     "safeNo": "Not safe — may spawn combat",
-    "safeHint": "Relic / data site safety"
+    "safeHint": "Relic / data site safety",
+    "countFiltered": "{{shown}} of {{total}}",
+    "countHint": "Signatures in this system",
+    "countFilteredHint": "Signatures shown of the system total"
   },
   "stats": {
     "title": "User Stats",
@@ -1898,7 +1953,12 @@
     "standingValue": "{{label}}: {{value}}",
     "panesTitle": "Panels",
     "panesHint": "Choose which panels appear below. Hidden ones keep their place, so switching one back on returns it to where you had it.",
-    "openAnoikis": "Open in anoik.is"
+    "openAnoikis": "Open in anoik.is",
+    "moveLeft": "Move to the previous column",
+    "moveRight": "Move to the next column",
+    "copyName": "Copy system name",
+    "nameCopied": "Copied {{name}}",
+    "copyFailed": "Couldn't copy — select and copy manually."
   },
   "time": {
     "justNow": "just now",
@@ -1926,8 +1986,6 @@
     "getMoreMaps": "+ Get more maps",
     "help": "Help & how-to",
     "lastKnownSystem": "Last known system",
-    "layoutBelowTooltip": "Panel is below the map — switch to beside",
-    "layoutBesideTooltip": "Panel is beside the map — switch to below",
     "leaveMapConfirm": "Remove \"{{name}}\" from your list? The owner can share it again later.",
     "leaveThisMap": "Leave shared map",
     "locked": "Locked",
@@ -2074,7 +2132,8 @@
     "searchPlaceholder": "Search…",
     "connectedSystems": "Connected Systems",
     "other": "Other",
-    "inbound": "inbound"
+    "inbound": "inbound",
+    "exactClass": "Exact class"
   },
   "exits": {
     "notifTitle": "K-space exit",
@@ -2101,5 +2160,35 @@
     "imported": "Imported {{systems}} systems, {{connections}} connections and {{signatures}} signatures from Tripwire",
     "importedWithNotes": "Imported {{systems}} systems, {{connections}} connections, {{signatures}} signatures and notes on {{notes}} systems from Tripwire",
     "notTripwireData": "That doesn’t look like Tripwire chain data — no signatures in it"
+  },
+  "routePlanner": {
+    "from": "From",
+    "to": "To",
+    "searchSystem": "Search a system…",
+    "searching": "Searching…",
+    "clearField": "Clear",
+    "useMyLocation": "Use my current location",
+    "swap": "Swap from and to",
+    "followingLocation": "From {{system}} — your current location",
+    "pickBoth": "Pick a start and an end system to plan a route.",
+    "sameSystem": "Start and end are the same system.",
+    "noRoute": "No route found between those systems.",
+    "savedHdr": "Saved routes",
+    "savedEmpty": "None yet — plan a route, name it below, and hit Save.",
+    "nameToSave": "Name to save…",
+    "save": "Save",
+    "loadPlan": "Load this route",
+    "deletePlan": "Delete this route"
+  },
+  "flagPresets": {
+    "title": "Flag presets",
+    "hint": "Saved icon + colour + name combos you can apply to a connection flag in one click.",
+    "newItem": "New preset",
+    "add": "Add preset",
+    "remove": "Remove preset",
+    "pickIcon": "Choose icon",
+    "max": "Up to {{count}} presets",
+    "orgGroup": "Org",
+    "mineGroup": "Mine"
   }
 }

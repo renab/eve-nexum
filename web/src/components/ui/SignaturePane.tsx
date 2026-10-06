@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { charPortrait } from '../../utils/eveImages';
 import { api } from '../../api/client';
 import i18n from '../../i18n';
 import { useMapStore, awaitSystemCreate } from '../../store/mapStore';
@@ -357,7 +358,12 @@ function startTickIfNeeded() {
   }, 1000);
 }
 
-function ElapsedCell({ iso, className }: { iso: string | undefined; className?: string }) {
+function ElapsedCell({ iso, className, byCharId, byName }: {
+  iso: string | undefined;
+  className?: string;
+  byCharId?: number | string | null;
+  byName?: string | null;
+}) {
   const { t } = useTranslation();
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -375,7 +381,23 @@ function ElapsedCell({ iso, className }: { iso: string | undefined; className?: 
   const text = iso
     ? duration(t, Math.floor((tickNow - new Date(iso).getTime()) / 1000))
     : DASH;
-  return <td className={className}>{text}</td>;
+  return (
+    <td className={className}>
+      {/* Who scanned it, where the eye already is when reading the age.
+          Nothing is rendered when the row predates attribution or the scout's
+          account is gone -- a placeholder face would imply we know and don't. */}
+      {byCharId != null && (
+        <img
+          className="sig-td__scout"
+          src={charPortrait(byCharId, 32)}
+          alt=""
+          loading="lazy"
+          data-tooltip={byName ?? String(byCharId)}
+        />
+      )}
+      <span>{text}</span>
+    </td>
+  );
 }
 
 export function SignaturePane({ systemId }: { systemId: string }) {
@@ -1165,6 +1187,18 @@ export function SignaturePane({ systemId }: { systemId: string }) {
               {t('signatures.filterClear')}
             </button>
           )}
+          {/* Deliberately "shown of total" while a filter is on: a bare number
+              next to active filter chips reads as the system's signature count
+              and would understate it. No plural form, so it behaves the same in
+              languages that have none. */}
+          <span
+            className="sig-pane__count"
+            title={typeFilter.size > 0 ? t('signatures.countFilteredHint') : t('signatures.countHint')}
+          >
+            {typeFilter.size > 0
+              ? t('signatures.countFiltered', { shown: sortedSigs.length, total: sigs.length })
+              : sigs.length}
+          </span>
           <div className="sig-col-menu">
             <button
               ref={colBtnRef}
@@ -1455,6 +1489,8 @@ export function SignaturePane({ systemId }: { systemId: string }) {
                 {isColVisible('created') && (
                   <ElapsedCell
                     iso={sig.createdAt}
+                    byCharId={sig.createdByCharId}
+                    byName={sig.createdByName}
                     className={`sig-td--time${
                       isSigStale(sig.sigType, sig.whType, sig.createdAt, tickNow)
                         ? ' sig-td--age-stale'

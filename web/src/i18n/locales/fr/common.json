@@ -43,7 +43,8 @@
   "activity": {
     "thisHour": "cette heure",
     "allHidden": "Tous les graphiques sont masqués. Activez-les dans Options de carte → Activité.",
-    "loading": "Chargement de l'activité…"
+    "loading": "Chargement de l'activité…",
+    "peak": "pic {{value}}"
   },
   "addSystem": {
     "title": "Ajouter un système",
@@ -72,7 +73,9 @@
       "maps": "Cartes",
       "reports": "Rapports",
       "discord": "Discord",
-      "audit": "Journal d'audit"
+      "audit": "Journal d'audit",
+      "flags": "Modèles",
+      "defaults": "Disposition par défaut"
     },
     "access": {
       "title": "Accès de connexion",
@@ -362,6 +365,35 @@
       "colAmount": "Montant",
       "assign": "Attribuer",
       "assignPlaceholder": "ID du personnage"
+    },
+    "flags": {
+      "title": "Modèles de marqueur",
+      "hintCorp": "Modèles que chaque membre de votre corporation voit au-dessus des siens, pour qu'une icône ait le même sens pour tous. Jusqu'à {{max}}.",
+      "hintAlliance": "Modèles que chaque membre de votre alliance voit au-dessus des siens, pour qu'une icône ait le même sens pour tous. Jusqu'à {{max}}.",
+      "noCorp": "Ce déploiement n'a ni corporation ni alliance : il n'y a personne avec qui harmoniser.",
+      "saving": "Enregistrement…",
+      "saved": "Enregistré",
+      "loadFailed": "Impossible de charger les modèles.",
+      "saveFailed": "Impossible d'enregistrer les modèles."
+    },
+    "defaults": {
+      "title": "Disposition par défaut",
+      "hintCorp": "La configuration de départ de chaque membre de votre corporation. Organisez votre propre disposition, puis enregistrez-la ici.",
+      "hintAlliance": "La configuration de départ de chaque membre de votre alliance. Organisez votre propre disposition, puis enregistrez-la ici.",
+      "limitExisting": "Les membres héritent de tout réglage qu'ils n'ont jamais modifié. Ce qu'ils ont déjà défini reste le leur. L'ordre des panneaux, le zoom et les autres options d'affichage ne s'appliquent qu'aux nouveaux membres.",
+      "limitSession": "Les membres déjà connectés verront le changement à leur prochaine connexion.",
+      "noCorp": "Ce déploiement n'a ni corporation ni alliance : il n'y a personne à qui appliquer des valeurs par défaut.",
+      "none": "Aucune valeur par défaut définie.",
+      "summary": "{{count}} réglages enregistrés",
+      "lastSet": "Défini par {{who}} le {{when}}",
+      "showList": "Voir ce que cela inclut",
+      "hideList": "Masquer la liste",
+      "capture": "Enregistrer ma disposition actuelle par défaut",
+      "clear": "Effacer les valeurs par défaut",
+      "saving": "Enregistrement…",
+      "saved": "Enregistré",
+      "loadFailed": "Impossible de charger les valeurs par défaut.",
+      "saveFailed": "Impossible d'enregistrer les valeurs par défaut."
     }
   },
   "anomType": {
@@ -443,13 +475,18 @@
     "disabled": "Clés API désactivées"
   },
   "chainExits": {
+    "title": "Sorties de la chaîne",
     "noExits": "Aucune sortie K-space dans cette chaîne.",
     "hint": "Systèmes K-space actuellement sur la carte, par classe de sécurité. L'itinéraire vers Jita passe uniquement par les portails — les raccourcis par trou de ver ne sont pas comptés.",
+    "allExits": "Toutes les sorties K-space",
+    "noFavourites": "Aucun système favori — ajoutez-en dans le panneau Systèmes proches.",
+    "noRoute": "aucun itinéraire",
+    "inChain": "dans la chaîne",
+    "via": "via",
     "highSec": "High-sec",
     "lowSec": "Low-sec",
     "nullSec": "Null-sec",
-    "nearestJita": "Jita le plus proche :",
-    "via": "via"
+    "nearestJita": "Jita le plus proche :"
   },
   "chains": {
     "from": "De…",
@@ -687,6 +724,7 @@
     "removeSystem": "Retirer le système",
     "connectTo": "Connecter à un système…",
     "connectToHint": "Cliquez sur le système auquel connecter {{system}} — Échap pour annuler",
+    "addConnected": "Ajouter un système connecté…",
     "connectToDone": "{{from}} connecté à {{to}}",
     "removeSystems": "Retirer {{count}} systèmes",
     "addSystem": "Ajouter un système",
@@ -713,7 +751,8 @@
     "clearTag": "Effacer le marqueur",
     "jumpRangeFrom": "Portée de saut d’ici",
     "jumpCyno": "Saut cyno",
-    "jumpRangeClear": "Effacer la portée de saut"
+    "jumpRangeClear": "Effacer la portée de saut",
+    "copyName": "Copier le nom du système"
   },
   "customIntel": {
     "title": "Intel personnalisée",
@@ -1330,6 +1369,8 @@
   },
   "mapSidebar": {
     "activityHint": "Afficher les graphiques pour :",
+    "activityCombined": "Combiner en un seul graphique",
+    "activityCombinedHint": "Des axes communs pour toutes les métriques, chacune mise à l'échelle de son propre pic sur 24 h. Les valeurs exactes s'affichent au survol.",
     "activityJumps": "Sauts",
     "activityNpcDelta": "Delta PNJ",
     "activityNpcKills": "PNJ détruits",
@@ -1395,6 +1436,13 @@
     "fleetHeatmap": "Carte de chaleur de flotte",
     "fleetHint": "Afficher les membres de la flotte sous forme de points violets sur leur système. Survolez un point pour voir les noms.",
     "fontSize": "Taille de police",
+    "density": "Densité de l'interface",
+    "densityHint": "Espacement autour du texte des panneaux. La taille de police est indépendante : vous pouvez garder un grand texte dans une interface plus compacte.",
+    "densityOptions": {
+      "comfortable": "Confortable",
+      "compact": "Compacte",
+      "dense": "Dense"
+    },
     "heatIntensity": "Intensité",
     "heatmap": "Carte de chaleur",
     "heatmapOptions": {
@@ -1477,6 +1525,7 @@
     "panelBelow": "Sous la carte",
     "panelBeside": "À côté de la carte",
     "panelLayout": "Disposition du panneau",
+    "panelLayoutTooltip": "Où se place le panneau de système : sous la carte, ou à côté sous forme de colonne à droite.",
     "patchNotesEmpty": "Aucune note de version pour l'instant.",
     "patchNotesFailed": "Impossible de charger les notes de version.",
     "patchNotesNoNotes": "Aucune note pour cette version.",
@@ -1527,7 +1576,6 @@
       "tracking": "Suivi",
       "route": "Itinéraire",
       "chains": "Chaînes",
-      "chainExits": "Sorties de chaîne",
       "proximityAlerts": "Alertes de proximité",
       "activity": "Activité",
       "fleet": "Flotte",
@@ -1539,7 +1587,8 @@
       "shortcuts": "Raccourcis",
       "notifications": "Notifications",
       "announcer": "Annonces vocales",
-      "jumpRange": "Portée de saut"
+      "jumpRange": "Portée de saut",
+      "chainExits": "Sorties de chaîne"
     },
     "settings": "Paramètres",
     "shareActiveHint": "Lien de partage en direct. Basculez ci-dessous ce que voient les invités. Si un lien a déjà été généré, les changements prennent effet automatiquement et vous n'avez PAS besoin de le régénérer.",
@@ -1592,7 +1641,9 @@
     "updateShareFailed": "Échec de la mise à jour des options de partage",
     "version": "Version",
     "wandererImported": "Importé depuis Wanderer : {{systems}} systèmes, {{connections}} connexions ({{skipped}} ignorés).",
-    "working": "En cours…"
+    "working": "En cours…",
+    "panelColumns": "Colonnes de panneaux",
+    "panelColumnsTooltip": "Répartit les volets du panneau en colonnes côte à côte, pour que les notes ou le killboard soient à côté des signatures plutôt qu'en dessous."
   },
   "mass": {
     "billionKg": "{{value}} Md kg",
@@ -1746,7 +1797,8 @@
     "panelsTitle": "Sections de la barre latérale",
     "panelsHint": "Choisissez les sections affichées dans la barre latérale. Celles masquées conservent leur place et y reviennent une fois réactivées.",
     "panelsAllHidden": "Toutes les sections sont masquées — la barre latérale sera vide.",
-    "emptyTitle": "Aucune section n’est affichée. Choisissez ici celles que vous voulez."
+    "emptyTitle": "Aucune section n’est affichée. Choisissez ici celles que vous voulez.",
+    "routePlanner": "Planificateur d'itinéraire"
   },
   "sigType": {
     "combat": "Combat",
@@ -1803,7 +1855,10 @@
     "colSafe": "Sûr",
     "safeYes": "Sûr — pas de combat",
     "safeNo": "Pas sûr — peut faire apparaître des ennemis",
-    "safeHint": "Sûreté des sites relique/données"
+    "safeHint": "Sûreté des sites relique/données",
+    "countFiltered": "{{shown}} sur {{total}}",
+    "countHint": "Signatures dans ce système",
+    "countFilteredHint": "Signatures affichées sur le total du système"
   },
   "stats": {
     "title": "Statistiques utilisateur",
@@ -1898,7 +1953,12 @@
     "standingValue": "{{label}} : {{value}}",
     "panesTitle": "Panneaux",
     "panesHint": "Choisissez les panneaux affichés ci-dessous. Ceux masqués conservent leur place et y reviennent une fois réactivés.",
-    "openAnoikis": "Ouvrir dans anoik.is"
+    "openAnoikis": "Ouvrir dans anoik.is",
+    "moveLeft": "Déplacer vers la colonne précédente",
+    "moveRight": "Déplacer vers la colonne suivante",
+    "copyName": "Copier le nom du système",
+    "nameCopied": "{{name}} copié",
+    "copyFailed": "Copie impossible — sélectionnez et copiez manuellement."
   },
   "time": {
     "justNow": "à l'instant",
@@ -1926,8 +1986,6 @@
     "getMoreMaps": "+ Obtenir plus de cartes",
     "help": "Aide & guide",
     "lastKnownSystem": "Dernier système connu",
-    "layoutBelowTooltip": "Panneau sous la carte — passer à côté",
-    "layoutBesideTooltip": "Panneau à côté de la carte — passer en dessous",
     "leaveMapConfirm": "Retirer « {{name}} » de votre liste ? Le propriétaire pourra la repartager plus tard.",
     "leaveThisMap": "Quitter la carte partagée",
     "locked": "Verrouillée",
@@ -2074,7 +2132,8 @@
     "searchPlaceholder": "Rechercher…",
     "connectedSystems": "Systèmes connectés",
     "other": "Autre",
-    "inbound": "entrant"
+    "inbound": "entrant",
+    "exactClass": "Classe exacte"
   },
   "exits": {
     "notifTitle": "Sortie vers le k-space",
@@ -2101,5 +2160,35 @@
     "imported": "{{systems}} systèmes, {{connections}} connexions et {{signatures}} signatures importés depuis Tripwire",
     "importedWithNotes": "{{systems}} systèmes, {{connections}} connexions, {{signatures}} signatures et les notes de {{notes}} systèmes importés depuis Tripwire",
     "notTripwireData": "Cela ne ressemble pas à des données de chaîne Tripwire — aucune signature"
+  },
+  "routePlanner": {
+    "from": "De",
+    "to": "À",
+    "searchSystem": "Rechercher un système…",
+    "searching": "Recherche…",
+    "clearField": "Effacer",
+    "useMyLocation": "Utiliser ma position actuelle",
+    "swap": "Inverser départ et arrivée",
+    "followingLocation": "Depuis {{system}} — votre position actuelle",
+    "pickBoth": "Choisissez un système de départ et d'arrivée pour planifier un itinéraire.",
+    "sameSystem": "Le départ et l'arrivée sont le même système.",
+    "noRoute": "Aucun itinéraire trouvé entre ces systèmes.",
+    "savedHdr": "Itinéraires enregistrés",
+    "savedEmpty": "Aucun pour l'instant — planifiez un itinéraire, nommez-le ci-dessous et enregistrez.",
+    "nameToSave": "Nom à enregistrer…",
+    "save": "Enregistrer",
+    "loadPlan": "Charger cet itinéraire",
+    "deletePlan": "Supprimer cet itinéraire"
+  },
+  "flagPresets": {
+    "title": "Modèles de marqueur",
+    "hint": "Combinaisons enregistrées d'icône, de couleur et de nom, applicables à une connexion en un clic.",
+    "newItem": "Nouveau modèle",
+    "add": "Ajouter un modèle",
+    "remove": "Supprimer le modèle",
+    "pickIcon": "Choisir une icône",
+    "max": "Jusqu'à {{count}} modèles",
+    "orgGroup": "Organisation",
+    "mineGroup": "Les miens"
   }
 }

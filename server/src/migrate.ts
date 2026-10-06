@@ -251,6 +251,48 @@ export async function migrate() {
     -- admin turns them off.
     ALTER TABLE corp_discord_settings ADD COLUMN IF NOT EXISTS notify_chains BOOLEAN NOT NULL DEFAULT TRUE;
 
+    -- Connection-flag presets, so a corp can standardise its signals ("red
+    -- skull always means DO NOT ROLL"). Mirrored corp/alliance pair for the
+    -- same reason the Discord settings are: a map is corp- OR alliance-scoped,
+    -- never both, so a read touches exactly one of these.
+    --
+    -- The list is JSONB rather than a row per preset: it is small, capped, and
+    -- always read and written whole, and its order is part of the value.
+    -- The org's starting UI configuration. An admin arranges their own layout
+    -- and captures it; members inherit anything they have never set themselves.
+    --
+    -- One table with scope_kind/scope_id rather than the corp_* / alliance_*
+    -- pair used by the Discord settings: that shape has to be ALTERed in
+    -- lockstep every time it grows, and this one has no reason to repeat it.
+    --
+    -- Two payloads because the settings live in two places. The settings column
+    -- mirrors users.ui_settings, which members inherit key-by-key whenever they
+    -- have none of their own. The prefs column mirrors the dedicated columns on
+    -- users, which are
+    -- NOT NULL with schema defaults, so "never touched" is indistinguishable
+    -- from "set to the same value" and those can only be applied when an
+    -- account is created.
+    CREATE TABLE IF NOT EXISTS org_ui_defaults (
+      scope_kind TEXT        NOT NULL CHECK (scope_kind IN ('corp', 'alliance')),
+      scope_id   INTEGER     NOT NULL,
+      settings   JSONB       NOT NULL DEFAULT '{}'::jsonb,
+      prefs      JSONB       NOT NULL DEFAULT '{}'::jsonb,
+      updated_by INTEGER     REFERENCES users(id) ON DELETE SET NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (scope_kind, scope_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS corp_flag_presets (
+      corp_id    INTEGER     PRIMARY KEY,
+      presets    JSONB       NOT NULL DEFAULT '[]'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS alliance_flag_presets (
+      alliance_id INTEGER     PRIMARY KEY,
+      presets     JSONB       NOT NULL DEFAULT '[]'::jsonb,
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     -- Alliance mirror of corp_discord_settings, so alliance maps get the same
     -- region filter + per-event-type toggles. A map is corp- OR alliance-scoped,
     -- never both, so its dispatch reads exactly one of these tables.
@@ -1043,6 +1085,22 @@ export async function migrate() {
     ALTER TABLE jump_plans ADD COLUMN IF NOT EXISTS avoid_system_ids    INTEGER[] NOT NULL DEFAULT '{}';
     ALTER TABLE jump_plans ADD COLUMN IF NOT EXISTS waypoint_system_ids INTEGER[] NOT NULL DEFAULT '{}';
     ALTER TABLE jump_plans ADD COLUMN IF NOT EXISTS prefer_level        TEXT      NOT NULL DEFAULT 'off';
+
+    -- Saved gate routes (account-scoped). Same shape and reasoning as
+    -- jump_plans above -- inputs only, the route itself is recomputed on load so
+    -- a saved plan reflects the chain as it stands today rather than a snapshot
+    -- of whatever holes were open when it was saved. Named to pair with
+    -- jump_plans (capital jumps) rather than overload "routes", which map_routes
+    -- already uses for saved chains through a single map.
+    CREATE TABLE IF NOT EXISTS route_plans (
+      id          UUID        PRIMARY KEY,
+      owner_id    INTEGER     NOT NULL,
+      name        TEXT        NOT NULL,
+      from_eve_id INTEGER     NOT NULL,
+      to_eve_id   INTEGER     NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_route_plans_owner ON route_plans (owner_id);
 
     -- Corp structures pulled from ESI (esi-corporations.read_structures.v1),
     -- scoped by corporation. Populated by a role-holding member's refresh; any

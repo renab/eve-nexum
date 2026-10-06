@@ -43,7 +43,8 @@
   "activity": {
     "thisHour": "esta hora",
     "allHidden": "Todos os gráficos ocultos. Ativa-os em Opções de mapa → Atividade.",
-    "loading": "A carregar atividade…"
+    "loading": "A carregar atividade…",
+    "peak": "pico {{value}}"
   },
   "addSystem": {
     "title": "Adicionar sistema",
@@ -72,7 +73,9 @@
       "maps": "Mapas",
       "reports": "Relatórios",
       "discord": "Discord",
-      "audit": "Registo de auditoria"
+      "audit": "Registo de auditoria",
+      "flags": "Predefinições",
+      "defaults": "Esquema predefinido"
     },
     "access": {
       "title": "Acesso de início de sessão",
@@ -362,6 +365,35 @@
       "colAmount": "Montante",
       "assign": "Atribuir",
       "assignPlaceholder": "ID do personagem"
+    },
+    "flags": {
+      "title": "Predefinições de marca",
+      "hintCorp": "Predefinições que todos os membros da tua corporação veem acima das suas, para que um ícone signifique o mesmo para todos. Até {{max}}.",
+      "hintAlliance": "Predefinições que todos os membros da tua aliança veem acima das suas, para que um ícone signifique o mesmo para todos. Até {{max}}.",
+      "noCorp": "Esta instalação não tem corporação nem aliança, por isso não há com quem padronizar.",
+      "saving": "A guardar…",
+      "saved": "Guardado",
+      "loadFailed": "Não foi possível carregar as predefinições.",
+      "saveFailed": "Não foi possível guardar as predefinições."
+    },
+    "defaults": {
+      "title": "Esquema predefinido",
+      "hintCorp": "A configuração com que cada membro da tua corporação começa. Organiza o teu próprio esquema e guarda-o aqui.",
+      "hintAlliance": "A configuração com que cada membro da tua aliança começa. Organiza o teu próprio esquema e guarda-o aqui.",
+      "limitExisting": "Os membros herdam qualquer definição que nunca tenham alterado. O que já tiverem definido continua a ser deles. A ordem dos painéis, o zoom e as restantes opções de visualização aplicam-se apenas a novos membros.",
+      "limitSession": "Os membros já com sessão iniciada verão a alteração no próximo início de sessão.",
+      "noCorp": "Esta instalação não tem corporação nem aliança, por isso não há para quem definir predefinições.",
+      "none": "Ainda sem predefinições.",
+      "summary": "{{count}} definições guardadas",
+      "lastSet": "Definido por {{who}} em {{when}}",
+      "showList": "Ver o que inclui",
+      "hideList": "Ocultar a lista",
+      "capture": "Guardar o meu esquema atual como predefinição",
+      "clear": "Limpar predefinições",
+      "saving": "A guardar…",
+      "saved": "Guardado",
+      "loadFailed": "Não foi possível carregar as predefinições.",
+      "saveFailed": "Não foi possível guardar as predefinições."
     }
   },
   "anomType": {
@@ -443,13 +475,18 @@
     "disabled": "Chaves de API desativadas"
   },
   "chainExits": {
+    "title": "Saídas da cadeia",
     "noExits": "Não há saídas de K-space nesta cadeia.",
     "hint": "Sistemas de K-space atualmente no mapa, por classe de segurança. A rota para Jita é só por portões — os atalhos por buraco de minhoca não são contados.",
+    "allExits": "Todas as saídas para K-space",
+    "noFavourites": "Ainda não há sistemas favoritos — adiciona alguns no painel Sistemas próximos.",
+    "noRoute": "sem rota",
+    "inChain": "na cadeia",
+    "via": "via",
     "highSec": "High-sec",
     "lowSec": "Low-sec",
     "nullSec": "Null-sec",
-    "nearestJita": "Jita mais próximo:",
-    "via": "via"
+    "nearestJita": "Jita mais próximo:"
   },
   "chains": {
     "from": "De…",
@@ -687,6 +724,7 @@
     "removeSystem": "Remover sistema",
     "connectTo": "Ligar a sistema…",
     "connectToHint": "Clique no sistema ao qual ligar {{system}} — Esc para cancelar",
+    "addConnected": "Adicionar sistema ligado…",
     "connectToDone": "{{from}} ligado a {{to}}",
     "removeSystems": "Remover {{count}} sistemas",
     "addSystem": "Adicionar sistema",
@@ -713,7 +751,8 @@
     "clearTag": "Limpar marca",
     "jumpRangeFrom": "Alcance de salto a partir daqui",
     "jumpCyno": "Salto cyno",
-    "jumpRangeClear": "Limpar alcance de salto"
+    "jumpRangeClear": "Limpar alcance de salto",
+    "copyName": "Copiar nome do sistema"
   },
   "customIntel": {
     "title": "Intel personalizada",
@@ -1330,6 +1369,8 @@
   },
   "mapSidebar": {
     "activityHint": "Mostrar gráficos do seguinte:",
+    "activityCombined": "Combinar num só gráfico",
+    "activityCombinedHint": "Um só conjunto de eixos para todas as métricas, cada uma escalada ao seu próprio pico de 24 h. Os valores exatos aparecem ao passar o cursor.",
     "activityJumps": "Saltos",
     "activityNpcDelta": "Delta de PNJ",
     "activityNpcKills": "PNJ destruídos",
@@ -1395,6 +1436,13 @@
     "fleetHeatmap": "Mapa de calor da frota",
     "fleetHint": "Mostra os companheiros de frota como pontos roxos no sistema em que estão. Passa o rato sobre um ponto para ver os nomes.",
     "fontSize": "Tamanho da letra",
+    "density": "Densidade da interface",
+    "densityHint": "Espaçamento à volta do texto dos painéis. O tamanho da letra é independente, por isso podes manter texto grande numa interface mais compacta.",
+    "densityOptions": {
+      "comfortable": "Confortável",
+      "compact": "Compacta",
+      "dense": "Densa"
+    },
     "heatIntensity": "Intensidade",
     "heatmap": "Mapa de calor",
     "heatmapOptions": {
@@ -1477,6 +1525,7 @@
     "panelBelow": "Abaixo do mapa",
     "panelBeside": "Ao lado do mapa",
     "panelLayout": "Esquema do painel",
+    "panelLayoutTooltip": "Onde fica o painel de sistema: por baixo do mapa ou ao lado, como uma coluna alta à direita.",
     "patchNotesEmpty": "Ainda não há notas de versão.",
     "patchNotesFailed": "Não foi possível carregar as notas de versão.",
     "patchNotesNoNotes": "Sem notas para esta versão.",
@@ -1527,7 +1576,6 @@
       "tracking": "Rastreamento",
       "route": "Rota",
       "chains": "Cadeias",
-      "chainExits": "Saídas da cadeia",
       "proximityAlerts": "Alertas de proximidade",
       "activity": "Atividade",
       "fleet": "Frota",
@@ -1539,7 +1587,8 @@
       "shortcuts": "Atalhos",
       "notifications": "Notificações",
       "announcer": "Anúncios de voz",
-      "jumpRange": "Alcance de salto"
+      "jumpRange": "Alcance de salto",
+      "chainExits": "Saídas da cadeia"
     },
     "settings": "Configurações",
     "shareActiveHint": "Ligação de partilha em direto. Alterna abaixo o que os convidados veem. Se já foi gerada uma ligação, as alterações têm efeito automaticamente e NÃO precisas de a regenerar.",
@@ -1592,7 +1641,9 @@
     "updateShareFailed": "Falha ao atualizar as opções de partilha",
     "version": "Versão",
     "wandererImported": "Importado do Wanderer: {{systems}} sistemas, {{connections}} ligações ({{skipped}} ignorados).",
-    "working": "A processar…"
+    "working": "A processar…",
+    "panelColumns": "Colunas de painéis",
+    "panelColumnsTooltip": "Divide os painéis em colunas lado a lado, para que as notas ou o killboard fiquem junto às assinaturas em vez de por baixo."
   },
   "mass": {
     "billionKg": "{{value}} mil M kg",
@@ -1746,7 +1797,8 @@
     "panelsTitle": "Secções da barra lateral",
     "panelsHint": "Escolha que secções aparecem na barra lateral. As ocultas mantêm o seu lugar e regressam a ele quando as reativar.",
     "panelsAllHidden": "Todas as secções estão ocultas — a barra lateral ficará vazia.",
-    "emptyTitle": "Não há secções visíveis. Escolha aqui as que pretende."
+    "emptyTitle": "Não há secções visíveis. Escolha aqui as que pretende.",
+    "routePlanner": "Planeador de rotas"
   },
   "sigType": {
     "combat": "Combate",
@@ -1803,7 +1855,10 @@
     "colSafe": "Seguro",
     "safeYes": "Seguro — sem combate",
     "safeNo": "Não seguro — pode gerar inimigos",
-    "safeHint": "Segurança de sites de relíquia/dados"
+    "safeHint": "Segurança de sites de relíquia/dados",
+    "countFiltered": "{{shown}} de {{total}}",
+    "countHint": "Assinaturas neste sistema",
+    "countFilteredHint": "Assinaturas mostradas do total do sistema"
   },
   "stats": {
     "title": "Estatísticas de utilizador",
@@ -1898,7 +1953,12 @@
     "standingValue": "{{label}}: {{value}}",
     "panesTitle": "Painéis",
     "panesHint": "Escolha que painéis aparecem abaixo. Os ocultos mantêm o seu lugar e regressam a ele quando os reativar.",
-    "openAnoikis": "Abrir no anoik.is"
+    "openAnoikis": "Abrir no anoik.is",
+    "moveLeft": "Mover para a coluna anterior",
+    "moveRight": "Mover para a coluna seguinte",
+    "copyName": "Copiar nome do sistema",
+    "nameCopied": "{{name}} copiado",
+    "copyFailed": "Não foi possível copiar — seleciona e copia manualmente."
   },
   "time": {
     "justNow": "agora mesmo",
@@ -1926,8 +1986,6 @@
     "getMoreMaps": "+ Obter mais mapas",
     "help": "Ajuda e guia",
     "lastKnownSystem": "Último sistema conhecido",
-    "layoutBelowTooltip": "Painel abaixo do mapa — mudar para o lado",
-    "layoutBesideTooltip": "Painel ao lado do mapa — mudar para baixo",
     "leaveMapConfirm": "Remover «{{name}}» da tua lista? O proprietário pode partilhá-lo novamente mais tarde.",
     "leaveThisMap": "Sair do mapa partilhado",
     "locked": "Bloqueado",
@@ -2074,7 +2132,8 @@
     "searchPlaceholder": "Procurar…",
     "connectedSystems": "Sistemas conectados",
     "other": "Outros",
-    "inbound": "de entrada"
+    "inbound": "de entrada",
+    "exactClass": "Classe exata"
   },
   "exits": {
     "notifTitle": "Saída para k-space",
@@ -2101,5 +2160,35 @@
     "imported": "Importados {{systems}} sistemas, {{connections}} ligações e {{signatures}} assinaturas do Tripwire",
     "importedWithNotes": "Importados {{systems}} sistemas, {{connections}} ligações, {{signatures}} assinaturas e notas de {{notes}} sistemas do Tripwire",
     "notTripwireData": "Isto não parece dados de cadeia do Tripwire — não tem assinaturas"
+  },
+  "routePlanner": {
+    "from": "De",
+    "to": "Para",
+    "searchSystem": "Procurar um sistema…",
+    "searching": "A procurar…",
+    "clearField": "Limpar",
+    "useMyLocation": "Usar a minha localização atual",
+    "swap": "Trocar origem e destino",
+    "followingLocation": "De {{system}} — a tua localização atual",
+    "pickBoth": "Escolhe um sistema de origem e de destino para planear uma rota.",
+    "sameSystem": "A origem e o destino são o mesmo sistema.",
+    "noRoute": "Nenhuma rota encontrada entre esses sistemas.",
+    "savedHdr": "Rotas guardadas",
+    "savedEmpty": "Nenhuma ainda — planeia uma rota, dá-lhe um nome abaixo e guarda.",
+    "nameToSave": "Nome para guardar…",
+    "save": "Guardar",
+    "loadPlan": "Carregar esta rota",
+    "deletePlan": "Eliminar esta rota"
+  },
+  "flagPresets": {
+    "title": "Predefinições de marca",
+    "hint": "Combinações guardadas de ícone, cor e nome que podes aplicar a uma ligação com um clique.",
+    "newItem": "Nova predefinição",
+    "add": "Adicionar predefinição",
+    "remove": "Remover predefinição",
+    "pickIcon": "Escolher ícone",
+    "max": "Até {{count}} predefinições",
+    "orgGroup": "Organização",
+    "mineGroup": "Minhas"
   }
 }

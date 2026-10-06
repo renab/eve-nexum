@@ -43,7 +43,8 @@
   "activity": {
     "thisHour": "今時間",
     "allHidden": "すべてのグラフが非表示です。マップオプション → アクティビティ でオンにしてください。",
-    "loading": "アクティビティを読み込み中…"
+    "loading": "アクティビティを読み込み中…",
+    "peak": "ピーク {{value}}"
   },
   "addSystem": {
     "title": "星系を追加",
@@ -72,7 +73,9 @@
       "maps": "マップ",
       "reports": "レポート",
       "discord": "Discord",
-      "audit": "監査ログ"
+      "audit": "監査ログ",
+      "flags": "フラグプリセット",
+      "defaults": "既定レイアウト"
     },
     "access": {
       "title": "ログインアクセス",
@@ -362,6 +365,35 @@
       "colAmount": "金額",
       "assign": "割り当て",
       "assignPlaceholder": "キャラクターID"
+    },
+    "flags": {
+      "title": "フラグのプリセット",
+      "hintCorp": "コーポレーションの全員が自分のプリセットの上に見る共通プリセットです。バッジの意味を全員で統一できます。最大 {{max}} 件。",
+      "hintAlliance": "アライアンスの全員が自分のプリセットの上に見る共通プリセットです。バッジの意味を全員で統一できます。最大 {{max}} 件。",
+      "noCorp": "このデプロイにはコーポレーションもアライアンスもないため、統一する相手がいません。",
+      "saving": "保存中…",
+      "saved": "保存しました",
+      "loadFailed": "プリセットを読み込めませんでした。",
+      "saveFailed": "プリセットを保存できませんでした。"
+    },
+    "defaults": {
+      "title": "既定レイアウト",
+      "hintCorp": "コーポレーションの全員が最初に使う構成です。自分のレイアウトを整えてから、ここで保存してください。",
+      "hintAlliance": "アライアンスの全員が最初に使う構成です。自分のレイアウトを整えてから、ここで保存してください。",
+      "limitExisting": "メンバーは自分で変更したことのない設定を引き継ぎます。すでに設定済みのものはそのままです。パネルの並び順・ズーム・その他の表示設定は新規メンバーにのみ適用されます。",
+      "limitSession": "すでにログイン中のメンバーには、次回ログイン時に反映されます。",
+      "noCorp": "このデプロイにはコーポレーションもアライアンスもないため、既定値を設定する対象がいません。",
+      "none": "既定値はまだ設定されていません。",
+      "summary": "{{count}} 件の設定を保存しました",
+      "lastSet": "{{who}} が {{when}} に設定",
+      "showList": "内容を表示",
+      "hideList": "一覧を隠す",
+      "capture": "現在のレイアウトを既定として保存",
+      "clear": "既定値を消去",
+      "saving": "保存中…",
+      "saved": "保存しました",
+      "loadFailed": "既定値を読み込めませんでした。",
+      "saveFailed": "既定値を保存できませんでした。"
     }
   },
   "anomType": {
@@ -443,13 +475,18 @@
     "disabled": "APIキーは無効です"
   },
   "chainExits": {
+    "title": "チェーンの出口",
     "noExits": "このチェーンに Kスペース出口はありません。",
     "hint": "現在マップ上にある Kスペース星系を、セキュリティクラス別に表示します。Jita へのルートはゲートのみ — ワームホールの近道は数えません。",
+    "allExits": "すべての K-space 出口",
+    "noFavourites": "お気に入りのシステムがまだありません — 「最寄りシステム」パネルで追加してください。",
+    "noRoute": "ルートなし",
+    "inChain": "チェーン内",
+    "via": "経由",
     "highSec": "ハイセク",
     "lowSec": "ローセク",
     "nullSec": "ヌルセク",
-    "nearestJita": "最寄りの Jita:",
-    "via": "経由"
+    "nearestJita": "最寄りの Jita:"
   },
   "chains": {
     "from": "出発…",
@@ -687,6 +724,7 @@
     "removeSystem": "星系を削除",
     "connectTo": "システムと接続…",
     "connectToHint": "{{system}} の接続先システムをクリックしてください — Esc でキャンセル",
+    "addConnected": "接続先システムを追加…",
     "connectToDone": "{{from}} を {{to}} に接続しました",
     "removeSystems": "{{count}} 星系を削除",
     "addSystem": "星系を追加",
@@ -713,7 +751,8 @@
     "clearTag": "タグを消去",
     "jumpRangeFrom": "ここからのジャンプ範囲",
     "jumpCyno": "サイノジャンプ",
-    "jumpRangeClear": "ジャンプ範囲をクリア"
+    "jumpRangeClear": "ジャンプ範囲をクリア",
+    "copyName": "システム名をコピー"
   },
   "customIntel": {
     "title": "カスタムインテル",
@@ -1330,6 +1369,8 @@
   },
   "mapSidebar": {
     "activityHint": "次のグラフを表示:",
+    "activityCombined": "1つのグラフにまとめる",
+    "activityCombinedHint": "すべての指標を共通の軸に表示し、各系列を24時間のピークで正規化します。正確な値はホバーで表示されます。",
     "activityJumps": "ジャンプ",
     "activityNpcDelta": "NPC 差分",
     "activityNpcKills": "NPC キル",
@@ -1395,6 +1436,13 @@
     "fleetHeatmap": "フリートヒートマップ",
     "fleetHint": "フリートメンバーを、いる星系の上に紫の点として表示します。点にカーソルを合わせると名前が表示されます。",
     "fontSize": "フォントサイズ",
+    "density": "インターフェースの密度",
+    "densityHint": "パネル内テキストの余白。フォントサイズとは独立しているため、大きな文字のまま余白を詰めることもできます。",
+    "densityOptions": {
+      "comfortable": "ゆったり",
+      "compact": "コンパクト",
+      "dense": "高密度"
+    },
     "heatIntensity": "強度",
     "heatmap": "ヒートマップ",
     "heatmapOptions": {
@@ -1477,6 +1525,7 @@
     "panelBelow": "マップの下",
     "panelBeside": "マップの横",
     "panelLayout": "パネルの配置",
+    "panelLayoutTooltip": "システムパネルの位置: マップの下、または右側の縦長の列として横に配置します。",
     "patchNotesEmpty": "まだパッチノートがありません。",
     "patchNotesFailed": "パッチノートを読み込めませんでした。",
     "patchNotesNoNotes": "このバージョンのノートはありません。",
@@ -1527,7 +1576,6 @@
       "tracking": "追跡",
       "route": "ルート",
       "chains": "チェーン",
-      "chainExits": "チェーン出口",
       "proximityAlerts": "近接アラート",
       "activity": "アクティビティ",
       "fleet": "フリート",
@@ -1539,7 +1587,8 @@
       "shortcuts": "ショートカット",
       "notifications": "通知",
       "announcer": "音声アナウンス",
-      "jumpRange": "ジャンプ範囲"
+      "jumpRange": "ジャンプ範囲",
+      "chainExits": "チェーン出口"
     },
     "settings": "設定",
     "shareActiveHint": "ライブ共有リンク。下でゲストに見せる内容を切り替えてください。以前にリンクを生成済みの場合、変更は自動的に反映され、再生成は不要です。",
@@ -1592,7 +1641,9 @@
     "updateShareFailed": "共有オプションの更新に失敗しました",
     "version": "バージョン",
     "wandererImported": "Wanderer からインポート：{{systems}} システム、{{connections}} 接続（{{skipped}} 件スキップ）。",
-    "working": "処理中…"
+    "working": "処理中…",
+    "panelColumns": "パネルの列数",
+    "panelColumnsTooltip": "パネル内のペインを横並びの列に分割し、メモやキルボードをシグネチャの下ではなく横に表示します。"
   },
   "mass": {
     "billionKg": "{{value}}十億 kg",
@@ -1746,7 +1797,8 @@
     "panelsTitle": "サイドバーのセクション",
     "panelsHint": "サイドバーに表示するセクションを選びます。非表示にしたものも位置は保持され、再表示すると元の場所に戻ります。",
     "panelsAllHidden": "すべてのセクションが非表示です — サイドバーは空になります。",
-    "emptyTitle": "表示中のセクションがありません。ここで表示するものを選べます。"
+    "emptyTitle": "表示中のセクションがありません。ここで表示するものを選べます。",
+    "routePlanner": "ルートプランナー"
   },
   "sigType": {
     "combat": "コンバット",
@@ -1803,7 +1855,10 @@
     "colSafe": "安全",
     "safeYes": "安全 — 戦闘なし",
     "safeNo": "危険 — 敵が出現する可能性",
-    "safeHint": "遺物/データサイトの安全性"
+    "safeHint": "遺物/データサイトの安全性",
+    "countFiltered": "{{total}} 件中 {{shown}} 件",
+    "countHint": "このシステムのシグネチャ",
+    "countFilteredHint": "システム全体のうち表示されているシグネチャ"
   },
   "stats": {
     "title": "ユーザー統計",
@@ -1898,7 +1953,12 @@
     "standingValue": "{{label}}: {{value}}",
     "panesTitle": "パネル",
     "panesHint": "下に表示するパネルを選びます。非表示にしたものも位置は保持され、再表示すると元の場所に戻ります。",
-    "openAnoikis": "anoik.is で開く"
+    "openAnoikis": "anoik.is で開く",
+    "moveLeft": "前の列へ移動",
+    "moveRight": "次の列へ移動",
+    "copyName": "システム名をコピー",
+    "nameCopied": "{{name}} をコピーしました",
+    "copyFailed": "コピーできませんでした — 選択して手動でコピーしてください。"
   },
   "time": {
     "justNow": "たった今",
@@ -1926,8 +1986,6 @@
     "getMoreMaps": "+ マップを追加する",
     "help": "ヘルプ・使い方",
     "lastKnownSystem": "最後に確認されたシステム",
-    "layoutBelowTooltip": "パネルはマップの下 — 横に切り替え",
-    "layoutBesideTooltip": "パネルはマップの横 — 下に切り替え",
     "leaveMapConfirm": "「{{name}}」をリストから削除しますか？オーナーは後で再共有できます。",
     "leaveThisMap": "共有マップから退出",
     "locked": "ロック中",
@@ -2074,7 +2132,8 @@
     "searchPlaceholder": "検索…",
     "connectedSystems": "接続された星系",
     "other": "その他",
-    "inbound": "インバウンド"
+    "inbound": "インバウンド",
+    "exactClass": "正確なクラス"
   },
   "exits": {
     "notifTitle": "k-spaceの出口",
@@ -2100,5 +2159,35 @@
     "imported": "Tripwire から {{systems}} システム、{{connections}} 接続、{{signatures}} シグネチャをインポートしました",
     "importedWithNotes": "Tripwire から {{systems}} システム、{{connections}} 接続、{{signatures}} シグネチャ、{{notes}} システムのメモをインポートしました",
     "notTripwireData": "Tripwire のチェーンデータではないようです — シグネチャがありません"
+  },
+  "routePlanner": {
+    "from": "出発",
+    "to": "目的地",
+    "searchSystem": "システムを検索…",
+    "searching": "検索中…",
+    "clearField": "クリア",
+    "useMyLocation": "現在地を使用",
+    "swap": "出発地と目的地を入れ替え",
+    "followingLocation": "{{system}} から — 現在地",
+    "pickBoth": "ルートを計算するには出発システムと目的システムを選択してください。",
+    "sameSystem": "出発地と目的地が同じシステムです。",
+    "noRoute": "これらのシステム間のルートが見つかりません。",
+    "savedHdr": "保存したルート",
+    "savedEmpty": "まだありません — ルートを計算し、下で名前を付けて保存してください。",
+    "nameToSave": "保存する名前…",
+    "save": "保存",
+    "loadPlan": "このルートを読み込む",
+    "deletePlan": "このルートを削除"
+  },
+  "flagPresets": {
+    "title": "フラグのプリセット",
+    "hint": "アイコン・色・名前の組み合わせを保存し、接続のフラグにワンクリックで適用します。",
+    "newItem": "新しいプリセット",
+    "add": "プリセットを追加",
+    "remove": "プリセットを削除",
+    "pickIcon": "アイコンを選択",
+    "max": "最大 {{count}} 件",
+    "orgGroup": "組織",
+    "mineGroup": "自分"
   }
 }

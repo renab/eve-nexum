@@ -43,7 +43,8 @@
   "activity": {
     "thisHour": "diese Stunde",
     "allHidden": "Alle Diagramme ausgeblendet. Aktiviere sie unter Kartenoptionen → Aktivität.",
-    "loading": "Aktivität wird geladen…"
+    "loading": "Aktivität wird geladen…",
+    "peak": "Max. {{value}}"
   },
   "addSystem": {
     "title": "System hinzufügen",
@@ -72,7 +73,9 @@
       "maps": "Karten",
       "reports": "Berichte",
       "discord": "Discord",
-      "audit": "Audit-Log"
+      "audit": "Audit-Log",
+      "flags": "Flaggen-Vorlagen",
+      "defaults": "Standard-Layout"
     },
     "access": {
       "title": "Anmeldezugang",
@@ -362,6 +365,35 @@
       "colAmount": "Betrag",
       "assign": "Zuordnen",
       "assignPlaceholder": "Charakter-ID"
+    },
+    "flags": {
+      "title": "Flaggen-Vorlagen",
+      "hintCorp": "Vorlagen, die jedes Mitglied deines Corps über den eigenen sieht, damit ein Symbol für alle dasselbe bedeutet. Bis zu {{max}}.",
+      "hintAlliance": "Vorlagen, die jedes Mitglied deiner Allianz über den eigenen sieht, damit ein Symbol für alle dasselbe bedeutet. Bis zu {{max}}.",
+      "noCorp": "Diese Installation hat weder Corp noch Allianz — es gibt niemanden, mit dem man sich abstimmen könnte.",
+      "saving": "Speichern…",
+      "saved": "Gespeichert",
+      "loadFailed": "Vorlagen konnten nicht geladen werden.",
+      "saveFailed": "Vorlagen konnten nicht gespeichert werden."
+    },
+    "defaults": {
+      "title": "Standard-Layout",
+      "hintCorp": "Die Konfiguration, mit der jedes Mitglied deines Corps startet. Richte dein eigenes Layout ein und übernimm es hier.",
+      "hintAlliance": "Die Konfiguration, mit der jedes Mitglied deiner Allianz startet. Richte dein eigenes Layout ein und übernimm es hier.",
+      "limitExisting": "Mitglieder übernehmen jede Einstellung, die sie nie selbst geändert haben. Bereits Gesetztes bleibt ihres. Panel-Reihenfolge, Zoom und die übrigen Anzeigeoptionen gelten nur für neue Mitglieder.",
+      "limitSession": "Bereits angemeldete Mitglieder übernehmen Änderungen bei der nächsten Anmeldung.",
+      "noCorp": "Diese Installation hat weder Corp noch Allianz — es gibt niemanden, für den Standards gelten könnten.",
+      "none": "Noch keine Standards gesetzt.",
+      "summary": "{{count}} Einstellungen übernommen",
+      "lastSet": "Zuletzt gesetzt von {{who}} am {{when}}",
+      "showList": "Anzeigen, was enthalten ist",
+      "hideList": "Liste ausblenden",
+      "capture": "Mein aktuelles Layout als Standard speichern",
+      "clear": "Standards löschen",
+      "saving": "Speichern…",
+      "saved": "Gespeichert",
+      "loadFailed": "Standards konnten nicht geladen werden.",
+      "saveFailed": "Standards konnten nicht gespeichert werden."
     }
   },
   "anomType": {
@@ -443,13 +475,18 @@
     "disabled": "API-Schlüssel deaktiviert"
   },
   "chainExits": {
+    "title": "Chain-Ausgänge",
     "noExits": "Keine K-Space-Ausgänge in dieser Kette.",
     "hint": "K-Space-Systeme aktuell auf der Karte, nach Sicherheitsklasse. Jita-Route nur über Gates — Wurmloch-Abkürzungen nicht gezählt.",
+    "allExits": "Alle K-Space-Ausgänge",
+    "noFavourites": "Noch keine Favoriten — füge welche im Panel „Nächste Systeme“ hinzu.",
+    "noRoute": "keine Route",
+    "inChain": "in der Chain",
+    "via": "über",
     "highSec": "High-Sec",
     "lowSec": "Low-Sec",
     "nullSec": "Null-Sec",
-    "nearestJita": "Nächstes Jita:",
-    "via": "über"
+    "nearestJita": "Nächstes Jita:"
   },
   "chains": {
     "from": "Von…",
@@ -687,6 +724,7 @@
     "removeSystem": "System entfernen",
     "connectTo": "Mit System verbinden …",
     "connectToHint": "Klicke das System an, mit dem {{system}} verbunden werden soll — Esc bricht ab",
+    "addConnected": "Verbundenes System hinzufügen …",
     "connectToDone": "{{from}} mit {{to}} verbunden",
     "removeSystems": "{{count}} Systeme entfernen",
     "addSystem": "System hinzufügen",
@@ -713,7 +751,8 @@
     "clearTag": "Tag entfernen",
     "jumpRangeFrom": "Sprungreichweite von hier",
     "jumpCyno": "Cyno-Sprung",
-    "jumpRangeClear": "Sprungreichweite löschen"
+    "jumpRangeClear": "Sprungreichweite löschen",
+    "copyName": "Systemnamen kopieren"
   },
   "customIntel": {
     "title": "Eigene Intel",
@@ -1330,6 +1369,8 @@
   },
   "mapSidebar": {
     "activityHint": "Graphen für Folgendes anzeigen:",
+    "activityCombined": "Zu einem Graphen zusammenfassen",
+    "activityCombinedHint": "Ein Achsensystem für alle Metriken, jede auf ihr eigenes 24-h-Maximum skaliert. Genaue Werte beim Daraufzeigen.",
     "activityJumps": "Sprünge",
     "activityNpcDelta": "NPC-Delta",
     "activityNpcKills": "NPC-Abschüsse",
@@ -1395,6 +1436,13 @@
     "fleetHeatmap": "Flotten-Heatmap",
     "fleetHint": "Flottenmitglieder als violette Punkte auf ihrem System anzeigen. Punkt überfahren, um die Namen zu sehen.",
     "fontSize": "Schriftgröße",
+    "density": "Oberflächendichte",
+    "densityHint": "Abstände um Panel-Texte. Die Schriftgröße ist davon getrennt, große Schrift in kompakterer Oberfläche ist also möglich.",
+    "densityOptions": {
+      "comfortable": "Komfortabel",
+      "compact": "Kompakt",
+      "dense": "Dicht"
+    },
     "heatIntensity": "Intensität",
     "heatmap": "Heatmap",
     "heatmapOptions": {
@@ -1477,6 +1525,7 @@
     "panelBelow": "Unter Karte",
     "panelBeside": "Neben Karte",
     "panelLayout": "Panel-Layout",
+    "panelLayoutTooltip": "Wo das Systempanel sitzt: unter der Karte oder daneben als hohe Spalte rechts.",
     "patchNotesEmpty": "Noch keine Patchnotes.",
     "patchNotesFailed": "Patchnotes konnten nicht geladen werden.",
     "patchNotesNoNotes": "Keine Notizen für diese Version.",
@@ -1527,7 +1576,6 @@
       "tracking": "Verfolgung",
       "route": "Route",
       "chains": "Ketten",
-      "chainExits": "Ketten-Ausgänge",
       "proximityAlerts": "Näherungswarnungen",
       "activity": "Aktivität",
       "fleet": "Flotte",
@@ -1539,7 +1587,8 @@
       "shortcuts": "Tastenkürzel",
       "notifications": "Benachrichtigungen",
       "announcer": "Sprachansage",
-      "jumpRange": "Sprungreichweite"
+      "jumpRange": "Sprungreichweite",
+      "chainExits": "Ketten-Ausgänge"
     },
     "settings": "Einstellungen",
     "shareActiveHint": "Aktiver Freigabe-Link. Schalte unten um, was Gäste sehen. Falls zuvor ein Link erzeugt wurde, werden die Änderungen automatisch wirksam und du musst ihn NICHT neu erzeugen.",
@@ -1592,7 +1641,9 @@
     "updateShareFailed": "Freigabeoptionen konnten nicht aktualisiert werden",
     "version": "Version",
     "wandererImported": "Aus Wanderer importiert: {{systems}} Systeme, {{connections}} Verbindungen ({{skipped}} übersprungen).",
-    "working": "Arbeitet…"
+    "working": "Arbeitet…",
+    "panelColumns": "Panel-Spalten",
+    "panelColumnsTooltip": "Teilt die Bereiche des Panels in nebeneinanderliegende Spalten, sodass Notizen oder das Killboard neben den Signaturen statt darunter stehen."
   },
   "mass": {
     "billionKg": "{{value}} Mrd. kg",
@@ -1746,7 +1797,8 @@
     "panelsTitle": "Seitenleisten-Abschnitte",
     "panelsHint": "Wähle, welche Abschnitte in der Seitenleiste erscheinen. Ausgeblendete behalten ihren Platz und kehren beim Wiedereinschalten dorthin zurück.",
     "panelsAllHidden": "Alle Abschnitte sind ausgeblendet — die Seitenleiste bleibt leer.",
-    "emptyTitle": "Es werden keine Abschnitte angezeigt. Wähle hier aus, welche du möchtest."
+    "emptyTitle": "Es werden keine Abschnitte angezeigt. Wähle hier aus, welche du möchtest.",
+    "routePlanner": "Routenplaner"
   },
   "sigType": {
     "combat": "Kampf",
@@ -1803,7 +1855,10 @@
     "colSafe": "Sicher",
     "safeYes": "Sicher — kein Kampf",
     "safeNo": "Nicht sicher — kann Gegner spawnen",
-    "safeHint": "Sicherheit von Relikt-/Datenstätten"
+    "safeHint": "Sicherheit von Relikt-/Datenstätten",
+    "countFiltered": "{{shown}} von {{total}}",
+    "countHint": "Signaturen in diesem System",
+    "countFilteredHint": "Angezeigte Signaturen von der Gesamtzahl des Systems"
   },
   "stats": {
     "title": "Benutzerstatistik",
@@ -1898,7 +1953,12 @@
     "standingValue": "{{label}}: {{value}}",
     "panesTitle": "Bereiche",
     "panesHint": "Wähle, welche Bereiche unten erscheinen. Ausgeblendete behalten ihren Platz und kehren beim Wiedereinschalten dorthin zurück.",
-    "openAnoikis": "In anoik.is öffnen"
+    "openAnoikis": "In anoik.is öffnen",
+    "moveLeft": "In die vorherige Spalte verschieben",
+    "moveRight": "In die nächste Spalte verschieben",
+    "copyName": "Systemnamen kopieren",
+    "nameCopied": "{{name}} kopiert",
+    "copyFailed": "Kopieren fehlgeschlagen — bitte manuell markieren und kopieren."
   },
   "time": {
     "justNow": "gerade eben",
@@ -1926,8 +1986,6 @@
     "getMoreMaps": "+ Mehr Karten erhalten",
     "help": "Hilfe & Anleitung",
     "lastKnownSystem": "Letztes bekanntes System",
-    "layoutBelowTooltip": "Panel unter der Karte – daneben wechseln",
-    "layoutBesideTooltip": "Panel neben der Karte – nach unten wechseln",
     "leaveMapConfirm": "\"{{name}}\" aus deiner Liste entfernen? Der Eigentümer kann sie später erneut teilen.",
     "leaveThisMap": "Geteilte Karte verlassen",
     "locked": "Gesperrt",
@@ -2074,7 +2132,8 @@
     "searchPlaceholder": "Suchen…",
     "connectedSystems": "Verbundene Systeme",
     "other": "Andere",
-    "inbound": "eingehend"
+    "inbound": "eingehend",
+    "exactClass": "Genaue Klasse"
   },
   "exits": {
     "notifTitle": "K-Space-Ausgang",
@@ -2101,5 +2160,35 @@
     "imported": "{{systems}} Systeme, {{connections}} Verbindungen und {{signatures}} Signaturen aus Tripwire importiert",
     "importedWithNotes": "{{systems}} Systeme, {{connections}} Verbindungen, {{signatures}} Signaturen und Notizen zu {{notes}} Systemen aus Tripwire importiert",
     "notTripwireData": "Das sehen nicht nach Tripwire-Kettendaten aus — keine Signaturen enthalten"
+  },
+  "routePlanner": {
+    "from": "Von",
+    "to": "Nach",
+    "searchSystem": "System suchen…",
+    "searching": "Suche…",
+    "clearField": "Leeren",
+    "useMyLocation": "Aktuellen Standort verwenden",
+    "swap": "Start und Ziel tauschen",
+    "followingLocation": "Von {{system}} — dein aktueller Standort",
+    "pickBoth": "Wähle ein Start- und ein Zielsystem, um eine Route zu planen.",
+    "sameSystem": "Start und Ziel sind dasselbe System.",
+    "noRoute": "Keine Route zwischen diesen Systemen gefunden.",
+    "savedHdr": "Gespeicherte Routen",
+    "savedEmpty": "Noch keine — plane eine Route, benenne sie unten und speichere sie.",
+    "nameToSave": "Name zum Speichern…",
+    "save": "Speichern",
+    "loadPlan": "Diese Route laden",
+    "deletePlan": "Diese Route löschen"
+  },
+  "flagPresets": {
+    "title": "Flaggen-Vorlagen",
+    "hint": "Gespeicherte Kombinationen aus Symbol, Farbe und Name, die du mit einem Klick auf eine Verbindung anwendest.",
+    "newItem": "Neue Vorlage",
+    "add": "Vorlage hinzufügen",
+    "remove": "Vorlage entfernen",
+    "pickIcon": "Symbol wählen",
+    "max": "Bis zu {{count}} Vorlagen",
+    "orgGroup": "Organisation",
+    "mineGroup": "Meine"
   }
 }

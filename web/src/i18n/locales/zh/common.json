@@ -43,7 +43,8 @@
   "activity": {
     "thisHour": "本小时",
     "allHidden": "所有图表已隐藏。在地图选项 → 活动中开启它们。",
-    "loading": "正在加载活动…"
+    "loading": "正在加载活动…",
+    "peak": "峰值 {{value}}"
   },
   "addSystem": {
     "title": "添加星系",
@@ -72,7 +73,9 @@
       "maps": "地图",
       "reports": "报告",
       "discord": "Discord",
-      "audit": "审计日志"
+      "audit": "审计日志",
+      "flags": "标记预设",
+      "defaults": "默认布局"
     },
     "access": {
       "title": "登录访问",
@@ -362,6 +365,35 @@
       "colAmount": "金额",
       "assign": "分配",
       "assignPlaceholder": "角色 ID"
+    },
+    "flags": {
+      "title": "标记预设",
+      "hintCorp": "军团每位成员都会在自己的预设之上看到这些预设，让同一个图标对所有人含义一致。最多 {{max}} 个。",
+      "hintAlliance": "联盟每位成员都会在自己的预设之上看到这些预设，让同一个图标对所有人含义一致。最多 {{max}} 个。",
+      "noCorp": "此部署没有军团或联盟，没有需要统一的对象。",
+      "saving": "保存中…",
+      "saved": "已保存",
+      "loadFailed": "无法加载预设。",
+      "saveFailed": "无法保存预设。"
+    },
+    "defaults": {
+      "title": "默认布局",
+      "hintCorp": "军团每位成员的起始配置。先把自己的布局调整好，再在此保存。",
+      "hintAlliance": "联盟每位成员的起始配置。先把自己的布局调整好，再在此保存。",
+      "limitExisting": "成员会继承自己从未改过的设置；已经设置过的仍归他们自己。面板顺序、缩放等显示选项仅对新成员生效。",
+      "limitSession": "已登录的成员将在下次登录时生效。",
+      "noCorp": "此部署没有军团或联盟，没有可应用默认值的对象。",
+      "none": "尚未设置默认值。",
+      "summary": "已保存 {{count}} 项设置",
+      "lastSet": "由 {{who}} 于 {{when}} 设置",
+      "showList": "查看包含内容",
+      "hideList": "隐藏列表",
+      "capture": "将我当前的布局保存为默认",
+      "clear": "清除默认值",
+      "saving": "保存中…",
+      "saved": "已保存",
+      "loadFailed": "无法加载默认值。",
+      "saveFailed": "无法保存默认值。"
     }
   },
   "anomType": {
@@ -443,13 +475,18 @@
     "disabled": "API 密钥已禁用"
   },
   "chainExits": {
+    "title": "链路出口",
     "noExits": "此链中没有 K空间出口。",
     "hint": "当前地图上的 K空间星系，按安全等级分类。前往 Jita 的路线仅经星门 — 不计虫洞捷径。",
+    "allExits": "所有 K-space 出口",
+    "noFavourites": "还没有收藏的星系 — 在“最近星系”面板中添加。",
+    "noRoute": "无路线",
+    "inChain": "在链路内",
+    "via": "经由",
     "highSec": "高安",
     "lowSec": "低安",
     "nullSec": "零安",
-    "nearestJita": "最近的 Jita：",
-    "via": "经由"
+    "nearestJita": "最近的 Jita："
   },
   "chains": {
     "from": "起点…",
@@ -687,6 +724,7 @@
     "removeSystem": "移除星系",
     "connectTo": "连接到星系…",
     "connectToHint": "点击要与 {{system}} 相连的星系 —— 按 Esc 取消",
+    "addConnected": "添加相连星系…",
     "connectToDone": "已将 {{from}} 连接到 {{to}}",
     "removeSystems": "移除 {{count}} 个星系",
     "addSystem": "添加星系",
@@ -713,7 +751,8 @@
     "clearTag": "清除标记",
     "jumpRangeFrom": "从此处的跳跃范围",
     "jumpCyno": "Cyno 跳跃",
-    "jumpRangeClear": "清除跳跃范围"
+    "jumpRangeClear": "清除跳跃范围",
+    "copyName": "复制星系名称"
   },
   "customIntel": {
     "title": "自定义情报",
@@ -1330,6 +1369,8 @@
   },
   "mapSidebar": {
     "activityHint": "显示以下图表：",
+    "activityCombined": "合并为单个图表",
+    "activityCombinedHint": "所有指标共用一组坐标轴，各系列按各自的 24 小时峰值缩放。悬停可查看精确数值。",
     "activityJumps": "跳跃",
     "activityNpcDelta": "NPC 增量",
     "activityNpcKills": "NPC 击杀",
@@ -1395,6 +1436,13 @@
     "fleetHeatmap": "舰队热力图",
     "fleetHint": "将舰队成员显示为其所在星系上的紫色圆点。悬停圆点可查看名称。",
     "fontSize": "字体大小",
+    "density": "界面密度",
+    "densityHint": "面板文字周围的间距。字号为独立设置，因此可以在更紧凑的界面中保留较大的文字。",
+    "densityOptions": {
+      "comfortable": "宽松",
+      "compact": "紧凑",
+      "dense": "密集"
+    },
     "heatIntensity": "强度",
     "heatmap": "热力图",
     "heatmapOptions": {
@@ -1477,6 +1525,7 @@
     "panelBelow": "地图下方",
     "panelBeside": "地图旁",
     "panelLayout": "面板布局",
+    "panelLayoutTooltip": "系统面板的位置：位于地图下方，或作为右侧的竖向栏位于旁边。",
     "patchNotesEmpty": "暂无更新日志。",
     "patchNotesFailed": "无法加载更新日志。",
     "patchNotesNoNotes": "此版本没有说明。",
@@ -1527,7 +1576,6 @@
       "tracking": "跟踪",
       "route": "路线",
       "chains": "虫洞链",
-      "chainExits": "链出口",
       "proximityAlerts": "接近警报",
       "activity": "活动",
       "fleet": "舰队",
@@ -1539,7 +1587,8 @@
       "shortcuts": "快捷键",
       "notifications": "通知",
       "announcer": "语音播报",
-      "jumpRange": "跳跃范围"
+      "jumpRange": "跳跃范围",
+      "chainExits": "链出口"
     },
     "settings": "设置",
     "shareActiveHint": "实时共享链接。在下方切换访客可见的内容。如果之前已生成链接，更改会自动生效，你无需重新生成。",
@@ -1592,7 +1641,9 @@
     "updateShareFailed": "更新共享选项失败",
     "version": "版本",
     "wandererImported": "已从 Wanderer 导入：{{systems}} 个星系，{{connections}} 条连接（跳过 {{skipped}} 个）。",
-    "working": "处理中…"
+    "working": "处理中…",
+    "panelColumns": "面板列数",
+    "panelColumnsTooltip": "将面板中的各个窗格拆分为并排的栏，使笔记或击杀板显示在信号旁边而非下方。"
   },
   "mass": {
     "billionKg": "{{value}} 十亿 kg",
@@ -1746,7 +1797,8 @@
     "panelsTitle": "侧边栏板块",
     "panelsHint": "选择侧边栏中显示的板块。隐藏的板块会保留位置，重新开启时回到原处。",
     "panelsAllHidden": "所有板块都已隐藏 — 侧边栏将是空的。",
-    "emptyTitle": "当前没有显示任何板块。在此选择要显示的板块。"
+    "emptyTitle": "当前没有显示任何板块。在此选择要显示的板块。",
+    "routePlanner": "路线规划器"
   },
   "sigType": {
     "combat": "战斗",
@@ -1803,7 +1855,10 @@
     "colSafe": "安全",
     "safeYes": "安全 — 无战斗",
     "safeNo": "不安全 — 可能刷怪",
-    "safeHint": "遗迹/数据站点安全性"
+    "safeHint": "遗迹/数据站点安全性",
+    "countFiltered": "{{total}} 中的 {{shown}}",
+    "countHint": "该星系的信号",
+    "countFilteredHint": "已显示的信号数 / 星系总数"
   },
   "stats": {
     "title": "用户统计",
@@ -1898,7 +1953,12 @@
     "standingValue": "{{label}}：{{value}}",
     "panesTitle": "面板",
     "panesHint": "选择下方显示的面板。隐藏的面板会保留位置，重新开启时回到原处。",
-    "openAnoikis": "在 anoik.is 中打开"
+    "openAnoikis": "在 anoik.is 中打开",
+    "moveLeft": "移到上一列",
+    "moveRight": "移到下一列",
+    "copyName": "复制星系名称",
+    "nameCopied": "已复制 {{name}}",
+    "copyFailed": "无法复制 — 请手动选择并复制。"
   },
   "time": {
     "justNow": "刚刚",
@@ -1926,8 +1986,6 @@
     "getMoreMaps": "+ 获取更多地图",
     "help": "帮助与使用指南",
     "lastKnownSystem": "最后已知星系",
-    "layoutBelowTooltip": "面板在地图下方 — 切换到旁边",
-    "layoutBesideTooltip": "面板在地图旁 — 切换到下方",
     "leaveMapConfirm": "从你的列表中移除「{{name}}」？所有者之后可以再次共享。",
     "leaveThisMap": "退出共享地图",
     "locked": "已锁定",
@@ -2074,7 +2132,8 @@
     "searchPlaceholder": "搜索…",
     "connectedSystems": "已连接星系",
     "other": "其他",
-    "inbound": "入向"
+    "inbound": "入向",
+    "exactClass": "精确星域等级"
   },
   "exits": {
     "notifTitle": "k-space 出口",
@@ -2100,5 +2159,35 @@
     "imported": "已从 Tripwire 导入 {{systems}} 个星系、{{connections}} 条连接和 {{signatures}} 个信号",
     "importedWithNotes": "已从 Tripwire 导入 {{systems}} 个星系、{{connections}} 条连接、{{signatures}} 个信号，以及 {{notes}} 个星系的备注",
     "notTripwireData": "这看起来不是 Tripwire 的链数据 — 其中没有信号"
+  },
+  "routePlanner": {
+    "from": "起点",
+    "to": "终点",
+    "searchSystem": "搜索星系…",
+    "searching": "搜索中…",
+    "clearField": "清除",
+    "useMyLocation": "使用我的当前位置",
+    "swap": "交换起点和终点",
+    "followingLocation": "从 {{system}} — 你的当前位置",
+    "pickBoth": "选择起点和终点星系以规划路线。",
+    "sameSystem": "起点和终点是同一个星系。",
+    "noRoute": "未找到这两个星系之间的路线。",
+    "savedHdr": "已保存的路线",
+    "savedEmpty": "暂无 — 规划一条路线，在下方命名并保存。",
+    "nameToSave": "保存名称…",
+    "save": "保存",
+    "loadPlan": "载入此路线",
+    "deletePlan": "删除此路线"
+  },
+  "flagPresets": {
+    "title": "标记预设",
+    "hint": "保存的图标 + 颜色 + 名称组合，可一键应用到连接标记。",
+    "newItem": "新建预设",
+    "add": "添加预设",
+    "remove": "删除预设",
+    "pickIcon": "选择图标",
+    "max": "最多 {{count}} 个预设",
+    "orgGroup": "组织",
+    "mineGroup": "我的"
   }
 }

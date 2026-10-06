@@ -20,6 +20,7 @@ import { ApiKeysModal } from './ApiKeysModal';
 import { LanguageSwitcher } from './LanguageSwitcher';
 import { CharacterSwitcher } from './CharacterSwitcher';
 import { HeatmapMenu } from './HeatmapMenu';
+import { ChainExitsMenu } from './ChainExitsMenu';
 import { WhTypeChartModal } from './WhTypeChartModal';
 import { KillLogPanel } from './KillLogPanel';
 import { JumpPlannerModal } from './JumpPlannerModal';
@@ -38,7 +39,6 @@ import {
   ArrowCounterClockwiseIcon,
   ChartBarIcon,
   ClockCountdownIcon,
-  ColumnsIcon,
   GearIcon,
   DiscordLogoIcon,
   DotsSixVerticalIcon,
@@ -241,8 +241,6 @@ export function Toolbar() {
   const maps            = useMapStore((s) => s.maps);
   const maxMaps         = useMapStore((s) => s.maxMaps);
   const iskMapsEnabled  = useMapStore((s) => s.iskMapsEnabled);
-  const panelSideBySide = useMapStore((s) => s.panelSideBySide);
-  const setPanelSideBySide = useMapStore((s) => s.setPanelSideBySide);
   const setMapSettingsOpen = useMapStore((s) => s.setMapSettingsOpen);
   const maxCorpMaps     = useMapStore((s) => s.maxCorpMaps);
   const corpMapCount    = useMapStore((s) => s.corpMapCount);
@@ -608,6 +606,8 @@ export function Toolbar() {
 
         <HeatmapMenu />
 
+        <ChainExitsMenu />
+
         <button
           className={`toolbar__toggle toolbar__toggle--icon toolbar__toggle--prominent${mapOptionsOpen ? ' toolbar__toggle--on' : ''}`}
           onClick={() => setMapOptionsOpen(!mapOptionsOpen)}
@@ -766,15 +766,6 @@ export function Toolbar() {
           aria-label={t('mapSidebar.settings')}
         >
           <GearIcon size={18} weight="regular" />
-        </button>
-        <button
-          className={`toolbar__toggle toolbar__toggle--icon toolbar__toggle--prominent${panelSideBySide ? ' toolbar__toggle--on' : ''}`}
-          onClick={() => setPanelSideBySide(!panelSideBySide)}
-          aria-pressed={panelSideBySide}
-          data-tooltip={panelSideBySide ? t('toolbar.layoutBesideTooltip') : t('toolbar.layoutBelowTooltip')}
-          aria-label={t('mapSidebar.panelLayout')}
-        >
-          <ColumnsIcon size={18} weight="regular" />
         </button>
         <button
           className={`toolbar__toggle toolbar__toggle--icon toolbar__toggle--prominent${trackJumps ? ' toolbar__toggle--on' : ''}`}
