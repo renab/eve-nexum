@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { readUserSetting, writeUserSetting } from '../hooks/useUserSetting';
 import { v4 as uuid } from 'uuid';
 import { api } from '../api/client';
+import { inferredSize } from '../utils/wormholeSize';
+import { wormholeTypesSnapshot } from '../hooks/useWormholeTypes';
 import { enqueue, isPermanentRejection } from './pendingQueue';
 import { toast } from '../utils/toastStore';
 import type { WormholeMap, MapSystem, MapConnection, SavedRoute, SystemClass, WormholeEffect } from '../types';
@@ -1089,6 +1091,27 @@ export const useMapStore = create<MapStore>()((set, get) => {
           systems: s.map.systems.map((sys) => (sys.id === id ? { ...sys, ...updates } : sys)),
         },
       }));
+
+      // A system's class can arrive AFTER the holes touching it already have a
+      // type -- jumping into an unresolved placeholder names the system first
+      // and classifies it a moment later. Size depends on both ends (a hole
+      // touching a C1 caps at medium), so re-derive this system's connections
+      // once its class is known, or that cap would only ever be applied by
+      // opening the connection panel.
+      if (typeof updates.systemClass === 'string') {
+        const after = get().map;
+        for (const c of after.connections) {
+          if (c.sourceId !== id && c.targetId !== id) continue;
+          if (c.connectionType !== 'standard' || !c.type) continue;
+          const a = after.systems.find((sy) => sy.id === c.sourceId);
+          const b = after.systems.find((sy) => sy.id === c.targetId);
+          const size = inferredSize({
+            code: c.type, whTypes: wormholeTypesSnapshot(),
+            currentSize: c.size, classA: a?.systemClass, classB: b?.systemClass,
+          });
+          if (size && size !== c.size) get().updateConnection(c.id, { size });
+        }
+      }
       if (activeMapId) {
         const url  = `/api/maps/${activeMapId}/systems/${id}`;
         const body = JSON.stringify(updates);
@@ -1258,6 +1281,30 @@ export const useMapStore = create<MapStore>()((set, get) => {
     updateConnection: (id, updates) => {
       const { activeMapId, map } = get();
       const conn = map.connections.find((c) => c.id === id);
+
+      // Size follows from the wormhole type, so derive it HERE rather than in
+      // the connection panel. It used to be inferred only while that panel was
+      // open, which is why a freshly jumped hole sat at the 'large' default
+      // until somebody happened to click it -- a frigate hole could show L for
+      // the whole session and then "snap" on reload.
+      //
+      // Only when the type is what changed, and only when the caller has not
+      // set a size itself (the Thera/Turnur copy knows the feed's size and
+      // should win). Unknown or not-yet-loaded types yield null and leave the
+      // size alone, so this degrades to today's behaviour rather than guessing.
+      if (conn && typeof updates.type === 'string' && updates.size === undefined) {
+        const src = map.systems.find((sy) => sy.id === conn.sourceId);
+        const tgt = map.systems.find((sy) => sy.id === conn.targetId);
+        const size = inferredSize({
+          code: updates.type,
+          whTypes: wormholeTypesSnapshot(),
+          currentSize: updates.size ?? conn.size,
+          classA: src?.systemClass,
+          classB: tgt?.systemClass,
+        });
+        if (size && size !== conn.size) updates = { ...updates, size };
+      }
+
       if (conn) {
         const prev: Partial<MapConnection> = {};
         for (const key of Object.keys(updates) as Array<keyof typeof updates>) {
