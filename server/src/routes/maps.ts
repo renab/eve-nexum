@@ -242,10 +242,11 @@ export async function requireMapContentWrite(res: Response, mapId: string, req: 
   if (!access) { res.status(404).json({ error: 'Map not found' }); return null; }
 
   const acting = authUser(req);
-  // API-key writes need the 'write' scope; a 'read'/'events' key is refused
-  // here regardless of the bound character's role. A 'write' key then still
-  // passes through the same role check below (it acts as its bound character).
-  if (acting.apiScope && acting.apiScope !== 'write') {
+  // API-key writes need 'write' or the higher map-bound integration scope.
+  if (acting.apiScope === 'wormholesystems_sync' && acting.apiScopeMapId !== mapId) {
+    res.status(404).json({ error: 'Map not found' }); return null;
+  }
+  if (acting.apiScope && acting.apiScope !== 'write' && acting.apiScope !== 'wormholesystems_sync') {
     res.status(403).json({ error: "This API key cannot write (needs the 'write' scope)" }); return null;
   }
 

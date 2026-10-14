@@ -6,6 +6,9 @@ import { resolveOwnerId } from '../utils/owner.js';
 import { generateApiKey } from '../utils/apiKeys.js';
 import { audit } from '../services/audit.js';
 import { createLogger } from '../utils/logger.js';
+import { canEditTopology, isAdmin, isAllianceAdmin } from '../middleware/authContext.js';
+import type { Role } from '../middleware/authContext.js';
+import { getMapAccess } from './maps.js';
 
 const log = createLogger('keys');
 
@@ -17,7 +20,7 @@ export const keysRouter = Router();
 keysRouter.use(requireAuth);
 
 const MAX_KEYS_PER_OWNER = 25;
-const VALID_SCOPES = new Set(['read', 'events', 'write']);
+const VALID_SCOPES = new Set(['read', 'events', 'write', 'wormholesystems_sync']);
 // api_tokens.id is a uuid; Postgres throws 22P02 on malformed input, so guard
 // the path param up front and treat a bad shape as a clean 404.
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -34,6 +37,8 @@ keysRouter.get('/', async (req, res) => {
             t.name,
             t.token_prefix     AS "tokenPrefix",
             t.scope,
+            t.scope_map_id AS "scopeMapId",
+            m.name AS "scopeMapName",
             t.context_user_id  AS "contextUserId",
             u.character_name   AS "contextCharacterName",
             t.last_used_at     AS "lastUsedAt",
@@ -41,6 +46,7 @@ keysRouter.get('/', async (req, res) => {
             t.created_at       AS "createdAt"
        FROM api_tokens t
        LEFT JOIN users u ON u.id = t.context_user_id
+       LEFT JOIN maps m ON m.id = t.scope_map_id
       WHERE t.owner_id = $1
       ORDER BY t.created_at DESC`,
     [ownerId],
@@ -62,7 +68,7 @@ keysRouter.post('/', async (req, res) => {
   if (ownerId == null) { res.status(401).json({ error: 'Not authenticated' }); return; }
 
   const body = req.body as {
-    name?: unknown; contextCharacterId?: unknown; scope?: unknown; expiresAt?: unknown;
+    name?: unknown; contextCharacterId?: unknown; scope?: unknown; scopeMapId?: unknown; expiresAt?: unknown;
   };
 
   const name = typeof body.name === 'string' ? body.name.trim() : '';
@@ -72,7 +78,13 @@ keysRouter.post('/', async (req, res) => {
 
   const scope = body.scope == null ? 'read' : String(body.scope);
   if (!VALID_SCOPES.has(scope)) {
-    res.status(400).json({ error: 'scope must be "read" or "events"' }); return;
+    res.status(400).json({ error: 'Invalid API key scope' }); return;
+  }
+
+  let scopeMapId: string | null = null;
+  if (scope === 'wormholesystems_sync') {
+    scopeMapId = typeof body.scopeMapId === 'string' ? body.scopeMapId.toLowerCase() : '';
+    if (!UUID_RE.test(scopeMapId)) { res.status(400).json({ error: 'A map is required for this integration scope' }); return; }
   }
 
   // expiresAt is optional; if given it must be a valid future timestamp.
@@ -91,13 +103,34 @@ keysRouter.post('/', async (req, res) => {
   if (!Number.isInteger(contextCharacterId)) {
     res.status(400).json({ error: 'contextCharacterId is required' }); return;
   }
-  const { rows: charRows } = await db.query<{ id: number; ownerId: number | null }>(
-    `SELECT id, owner_id AS "ownerId" FROM users WHERE character_id = $1`,
+  const { rows: charRows } = await db.query<{ id: number; ownerId: number | null; characterId: number; characterName: string; role: Role; corpId: number | null; allianceId: number | null }>(
+    `SELECT id, owner_id AS "ownerId", character_id AS "characterId", character_name AS "characterName", role,
+            corp_id AS "corpId", alliance_id AS "allianceId" FROM users WHERE character_id = $1`,
     [contextCharacterId],
   );
   const ctx = charRows[0];
   if (!ctx || ctx.ownerId !== ownerId) {
     res.status(400).json({ error: 'contextCharacterId must be a character on your account' }); return;
+  }
+
+  if (scopeMapId) {
+    const priorAuth = req.apiAuth;
+    req.apiAuth = { userId: ctx.id, characterId: ctx.characterId, characterName: ctx.characterName, ownerId,
+      role: ctx.role, corpId: ctx.corpId, allianceId: ctx.allianceId };
+    try {
+      const access = await getMapAccess(scopeMapId, req);
+      if (!access) { res.status(404).json({ error: 'Map not found' }); return; }
+      if (access.accessKind === 'shared' && access.shareCanWrite === false) {
+        res.status(403).json({ error: 'This map was shared with you view-only' }); return;
+      }
+      if (access.accessKind !== 'owner' && !canEditTopology(ctx.role)) {
+        res.status(403).json({ error: 'Topology-edit permission is required for this integration key' }); return;
+      }
+      const canBypassLock = access.allianceId !== null ? isAllianceAdmin(ctx.role) : isAdmin(ctx.role);
+      if (access.locked && !canBypassLock) { res.status(403).json({ error: 'Map is locked' }); return; }
+    } finally {
+      req.apiAuth = priorAuth;
+    }
   }
 
   // Per-account cap — a soft guard against runaway key creation.
@@ -109,10 +142,10 @@ keysRouter.post('/', async (req, res) => {
   const key = generateApiKey();
   const { rows } = await db.query<{ id: string; createdAt: string }>(
     `INSERT INTO api_tokens
-       (owner_id, context_user_id, token_hash, token_prefix, name, scope, expires_at, created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       (owner_id, context_user_id, token_hash, token_prefix, name, scope, scope_map_id, expires_at, created_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id, created_at AS "createdAt"`,
-    [ownerId, ctx.id, key.hash, key.prefix, name, scope, expiresAt, req.session.userId],
+    [ownerId, ctx.id, key.hash, key.prefix, name, scope, scopeMapId, expiresAt, req.session.userId],
   );
   const created = rows[0];
 
@@ -125,6 +158,7 @@ keysRouter.post('/', async (req, res) => {
     id: created.id,
     name,
     scope,
+    scopeMapId,
     tokenPrefix: key.prefix,
     expiresAt,
     createdAt: created.createdAt,

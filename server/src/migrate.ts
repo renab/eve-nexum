@@ -974,13 +974,41 @@ export async function migrate() {
       token_hash         TEXT        NOT NULL UNIQUE,  -- sha-256 hex of the raw key
       token_prefix       TEXT        NOT NULL,         -- first chars, for display only
       name               TEXT        NOT NULL,         -- user label ("fleet bot")
-      scope              TEXT        NOT NULL DEFAULT 'read',  -- 'read' | 'events'
+      scope              TEXT        NOT NULL DEFAULT 'read',  -- read | events | write | wormholesystems_sync
+      scope_map_id       UUID        REFERENCES maps(id) ON DELETE CASCADE,
       last_used_at       TIMESTAMPTZ,
       expires_at         TIMESTAMPTZ,                  -- NULL = no expiry
       created_by_user_id INTEGER     REFERENCES users(id) ON DELETE SET NULL,
       created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS scope_map_id UUID REFERENCES maps(id) ON DELETE CASCADE;
     CREATE INDEX IF NOT EXISTS idx_api_tokens_owner ON api_tokens (owner_id);
+
+    -- Minimal ownership proof for rows created by the map-bound WormholeSystems
+    -- reconciliation endpoint. Existing/manual topology is never claimed.
+    CREATE TABLE IF NOT EXISTS wormholesystems_topology_ownership (
+      map_id          UUID NOT NULL REFERENCES maps(id) ON DELETE CASCADE,
+      source_identity TEXT NOT NULL,
+      item_kind       TEXT NOT NULL CHECK (item_kind IN ('system','connection')),
+      source_item_id  TEXT NOT NULL,
+      row_id          UUID NOT NULL,
+      managed_json    JSONB NOT NULL,
+      PRIMARY KEY (map_id, source_identity, item_kind, source_item_id),
+      UNIQUE (map_id, item_kind, row_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_wormholesystems_ownership_rows
+      ON wormholesystems_topology_ownership (map_id, item_kind, row_id);
+
+    -- Accepted full-map snapshot ordering is per map and canonical source,
+    -- independent of API-key rotation and source-owned row metadata.
+    CREATE TABLE IF NOT EXISTS wormholesystems_topology_checkpoints (
+      map_id          UUID NOT NULL REFERENCES maps(id) ON DELETE CASCADE,
+      source_identity TEXT NOT NULL,
+      fetched_at      TIMESTAMPTZ NOT NULL,
+      payload_digest  TEXT NOT NULL CHECK (payload_digest ~ '^[0-9a-f]{64}$'),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (map_id, source_identity)
+    );
 
     -- Login allow-list. Who may sign in to a restricted deployment, beyond the
     -- .env CORP_ID/ALLIANCE_ID core. Each row admits a corp, an alliance, or a

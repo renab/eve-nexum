@@ -125,7 +125,7 @@ Open <http://localhost> and click **Log in with EVE Online**. That's it.
 - **Cross-map sync** — opt-in (Map Controls → *Sync system data across my maps*). When the same EVE system appears on several of your maps, adding or editing its signatures and anomalies on one map copies them to the same system on your others — personal maps sync with your other personal maps, corp maps with the corp's other maps. Non-destructive: missing entries are inserted and blank fields filled, but data you've already entered is never overwritten and nothing is ever deleted (deletes and overwrite-paste removals stay local). Matches by EVE system id, so custom systems are skipped.
 - **Map locking** — admins can freeze a corp map's topology. Systems, connections, and the map name lock for non-admins, but signatures, structures, and per-system notes stay editable so ops can continue while the layout is pinned. The toolbar shows an amber 🔒 chip while the lock is active, and passive location tracking won't auto-add new systems on a locked map.
 - **Role-based access** — `admin` / `full` / `edit` / `readonly`. Roles only restrict corp-map actions; every user owns their personal maps regardless of role. See [Roles](#roles) for the full matrix.
-- **External API** — generate a long-lived API key (🔑 in the toolbar) to read and drive your maps from your own tools and scripts: read maps, subscribe to a live event stream, and (with a write key) push signatures/anomalies/structures. Account-scoped, acts as a chosen character, role-gated, topology stays human-only, revocable. See [External API](#external-api).
+- **External API** — generate a long-lived API key (🔑 in the toolbar) to read and drive your maps from your own tools and scripts: read maps, subscribe to a live event stream, and (with a write key) push signatures/anomalies/structures. A dedicated map-bound WormholeSystems key can reconcile only source-owned systems and connections on its selected map. Account-scoped, acts as a chosen character, role-gated, revocable. See [External API](#external-api).
 
 ### System intelligence
 
@@ -247,8 +247,9 @@ Read **and drive** your maps programmatically — pull the live chain into a fle
 | **Read only** | Read maps, systems, signatures, anomalies, structures |
 | **Read + live events** | …plus subscribe to the live event stream |
 | **Read + write content** | …plus add / edit / delete signatures, anomalies, and structures |
+| **WormholeSystems sync (map-bound)** | All of the above, plus reconcile source-owned topology on one selected map only |
 
-Writes are limited to **per-system content**. Map **topology** (adding/moving systems, drawing connections, rename, lock) is deliberately human-only — no key can change it.
+Ordinary keys can write only **per-system content**. The map-bound WormholeSystems scope is not generic topology CRUD: it adds one source reconciliation endpoint, preserves unmatched/manual rows and deletes only rows with matching integration ownership records. Browser topology routes remain human-only. Key creation requires a map the bound character can edit and shows the map binding in the key list.
 
 **Authenticate.** Send the key as a Bearer token:
 
@@ -274,6 +275,7 @@ curl -H "Authorization: Bearer nxm_…" https://yourdomain.com/api/v1/maps
 | `POST/PATCH/DELETE /api/v1/maps/:mapId/systems/:systemId/signatures[/:sigId]` | Add / edit / remove a signature |
 | `POST/PATCH/DELETE /api/v1/maps/:mapId/systems/:systemId/anomalies[/:anomId]` | Add / edit / remove an anomaly |
 | `POST/PATCH/DELETE /api/v1/maps/:mapId/systems/:systemId/structures[/:structureId]` | Add / edit / remove a structure |
+| `PUT /api/v1/maps/:mapId/wormholesystems/topology` | Reconcile source-identified systems and connections; requires the WormholeSystems scope bound to `:mapId` |
 
 Writes go through the exact same path as the app — so they fan out over the [event stream](#live-event-stream), trigger the inbound-K162 Discord notice, and cross-map sync just like a human edit.
 
@@ -298,7 +300,7 @@ Each `data:` line is a JSON object with a `type` and a type-specific payload. Th
 
 > Single-process delivery: the stream is served in-memory by one instance, the same as the in-app live sync. A multi-replica deployment would need the documented Postgres `LISTEN/NOTIFY` swap — see the realtime-sync notes.
 
-**Scope and safety.** Keys are **account-scoped** — a key can do everything its account can within its scope, so treat it as a secret. Writes are capped at per-system content (never topology) and are still gated by the bound character's role, so a key acting as a `readonly` corp member can't write a corp map. Keys can be given an expiry, record a *last used* time so you can spot a stale or leaked key, and are one-click revocable. Share-link tokens are never returned through the API.
+**Scope and safety.** Keys are **account-scoped** — a key can do everything its account can within its scope, so treat it as a secret. The WormholeSystems key is limited to one selected map, and its topology endpoint does not accept labels, notes, bookmarks, or arbitrary patch fields. Writes remain gated by the bound character's role and map lock. Keys can be given an expiry, record a *last used* time so you can spot a stale or leaked key, and are one-click revocable. Share-link tokens are never returned through the API.
 
 ---
 

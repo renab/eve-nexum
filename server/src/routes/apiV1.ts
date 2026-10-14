@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { apiKeyAuth } from '../middleware/apiKeyAuth.js';
-import { authUser } from '../middleware/authContext.js';
+import { authUser, canEditTopology, isAdmin, isAllianceAdmin } from '../middleware/authContext.js';
 import { getMapAccess, requireMapContentWrite, dispatchK162, flushK162, resolveStructureOwnerCorp } from './maps.js';
 import { streamMapEvents } from '../services/mapStream.js';
+import { MapLockedError, TopologyCheckpointConflict, reconcileWormholesystemsTopology, validateWormholesystemsTopology } from '../services/wormholesystemsTopology.js';
 import {
   listVisibleMaps, loadFullMap, isSystemInMap,
   loadSystemSignatures, loadSystemAnomalies, loadSystemStructures,
@@ -16,8 +17,8 @@ import {
 
 // Versioned, stable external API. Authenticated by an account-scoped API key
 // (Authorization: Bearer nxm_…); a browser session also works, so the same
-// surface is usable from the app. Reads need any scope; the event stream needs
-// 'events' (or 'write'); content writes need 'write'. Topology stays human-only.
+// surface is usable from the app. The integration scope is bound to one map and
+// can change topology only through its source-owned reconciliation endpoint.
 // See external_api_feature.md.
 //
 // Shapes are deliberately decoupled from the cookie UI routes but share the
@@ -46,7 +47,7 @@ apiV1Router.get('/maps', async (req, res) => {
     userAllianceId: me.allianceId,
     callerChar:     me.characterId,
   });
-  res.json({ maps });
+  res.json({ maps: me.apiScope === 'wormholesystems_sync' ? maps.filter(map => map.id === me.apiScopeMapId) : maps });
 });
 
 // GET /api/v1/maps/:mapId — full map (meta + systems + connections). Share-link
@@ -69,6 +70,10 @@ apiV1Router.get('/maps/:mapId', async (req, res) => {
 // Confirm the caller can read this map, else 404 (response sent). Returns false
 // when denied — mirrors the maps.ts requireMapWrite guard shape.
 async function requireMapRead(res: Response, mapId: string, req: Request): Promise<boolean> {
+  if (req.apiAuth?.apiScope === 'wormholesystems_sync' && req.apiAuth.apiScopeMapId !== mapId) {
+    res.status(404).json({ error: 'Map not found' });
+    return false;
+  }
   if (await getMapAccess(mapId, req)) return true;
   res.status(404).json({ error: 'Map not found' });
   return false;
@@ -104,7 +109,7 @@ apiV1Router.get('/maps/:mapId/systems/:systemId/structures', async (req, res) =>
 // taxonomy as the public contract.
 apiV1Router.get('/maps/:mapId/events', async (req, res) => {
   // Scope gate: a plain 'read' key can't subscribe to the stream; 'events' and
-  // 'write' (the higher scope) can. Session requests have no apiAuth and pass.
+  // 'write' and the higher integration scope can. Session requests have no apiAuth and pass.
   if (req.apiAuth && req.apiAuth.apiScope === 'read') {
     res.status(403).json({ error: "API key needs the 'events' scope" });
     return;
@@ -114,16 +119,46 @@ apiV1Router.get('/maps/:mapId/events', async (req, res) => {
   streamMapEvents(req, res, mapId);
 });
 
-// ── Content writes (requires a 'write'-scoped key) ─────────────────────────────
+// ── Content writes (requires 'write' or the higher integration scope) ──────────
 // Each guards via requireMapContentWrite (which enforces the write scope + the
 // bound character's role) and confirms the system is in the map, then delegates
-// to the same write services the cookie routes use. Topology (systems /
-// connections) is intentionally not exposed — those stay human-only.
+// to the same write services the cookie routes use. Generic topology remains
+// unavailable; the integration has one map-bound ownership-aware endpoint.
 
 // Resolve the write context shared by every handler below.
 function writeActor(req: Request) {
   return { userId: authUser(req).userId, clientId: req.get('x-client-id') ?? null };
 }
+
+apiV1Router.put('/maps/:mapId/wormholesystems/topology', async (req, res) => {
+  const actor = authUser(req);
+  const { mapId } = req.params;
+  if (actor.apiScope !== 'wormholesystems_sync' || actor.apiScopeMapId !== mapId) {
+    res.status(403).json({ error: 'A WormholeSystems key bound to this map is required' }); return;
+  }
+  const access = await getMapAccess(mapId, req);
+  if (!access) { res.status(404).json({ error: 'Map not found' }); return; }
+  if (access.accessKind === 'shared' && access.shareCanWrite === false) {
+    res.status(403).json({ error: 'This map was shared with you view-only' }); return;
+  }
+  if (access.accessKind !== 'owner' && !canEditTopology(actor.role)) {
+    res.status(403).json({ error: 'Topology-edit permission required' }); return;
+  }
+  const canBypassLock = access.allianceId !== null ? isAllianceAdmin(actor.role) : isAdmin(actor.role);
+  if (access.locked && !canBypassLock) { res.status(403).json({ error: 'Map is locked' }); return; }
+  try {
+    validateWormholesystemsTopology(req.body);
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid topology payload' }); return;
+  }
+  try {
+    res.json(await reconcileWormholesystemsTopology(mapId, req.body, actor.role));
+  } catch (error) {
+    if (error instanceof MapLockedError) { res.status(403).json({ error: error.message }); return; }
+    if (error instanceof TopologyCheckpointConflict) { res.status(409).json({ error: error.message }); return; }
+    throw error;
+  }
+});
 
 // Guard: content-write access + the system belongs to the map. Returns the
 // MapMeta (needed for K162 Discord scoping) or null once a response is sent.
