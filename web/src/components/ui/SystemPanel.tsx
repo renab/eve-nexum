@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -7,7 +7,7 @@ import { useSystemInfo } from '../../hooks/useSystemInfo';
 import { setDestination, addWaypoint } from '../../api/waypoint';
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import type { DragEndEvent } from '@dnd-kit/core';
-import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
+import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { useMapStore } from '../../store/mapStore';
 import { CLASS_COLORS, CLASS_LABELS, EFFECT_LABELS, EFFECT_MODIFIERS } from '../../data/wormholes';
 import { useWormholeTypes } from '../../hooks/useWormholeTypes';
@@ -15,7 +15,12 @@ import { whDestClass } from '../../utils/whDest';
 import { DraggableCard } from './DraggableCard';
 import { FloatingPanel, type PanelGeometry } from './FloatingPanel';
 import { useUserSetting } from '../../hooks/useUserSetting';
-import { SquaresFourIcon } from '../../icons';
+import {
+  clampColumnCount, bucketIntoColumns, movePane, reorderWithinColumn, columnOf,
+  equalWeights, normaliseWeights, resizeWeights,
+  type ColumnMap,
+} from '../../utils/panelColumns';
+import { SquaresFourIcon, XIcon, CopyIcon } from '../../icons';
 import { PanelVisibilityModal } from './PanelVisibilityModal';
 import { SignaturePane } from './SignaturePane';
 import { AnomalyPane } from './AnomalyPane';
@@ -169,7 +174,11 @@ function clampSide(v: number) {
 // it narrower down to a still-readable minimum, and the panel-stack fills the
 // space freed up (or the whole panel when the column is fully collapsed).
 const MIN_W      = 280;
-const MAX_W      = 400;
+// Raised from 400 (the old fixed width, which had become the ceiling, so the
+// column could only ever be dragged NARROWER). Widening takes space from the
+// pane stack, so it pulls against the column feature rather than with it --
+// that is the user's trade to make.
+const MAX_W      = 640;
 const DEFAULT_W  = 400;
 
 function clampWidth(v: number) {
@@ -217,6 +226,12 @@ export function SystemPanel() {
       const list = Array.isArray(prev) ? prev : [];
       return list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
     });
+  // How many parallel columns the stack is split into, and which column each
+  // pane sits in. Default 1 and {} -- the layout that shipped, so nothing moves
+  // for anyone who does not turn this on. The count is SET in Map Options; this
+  // only reads it.
+  const [colCountRaw] = useUserSetting<number>('nexum.systemPanel.columns', 1);
+  const [paneColumns, setPaneColumns] = useUserSetting<ColumnMap>('nexum.panelColumns', {});
   const [panesOpen, setPanesOpen] = useState(false);
   const updateSystem     = useMapStore((s) => s.updateSystem);
   const selectSystem     = useMapStore((s) => s.selectSystem);
@@ -249,6 +264,13 @@ export function SystemPanel() {
   // row beneath it. Only the docked panel moves — the workspace sidebar keeps
   // its own left/right setting, and floating panes are unaffected.
   const sideBySide = useMapStore((st) => st.panelSideBySide);
+  // Side-by-side is a narrow right-hand strip (460px by default, 320 floor), so
+  // splitting it would leave both halves unreadable. One column there, always.
+  const colCount = sideBySide ? 1 : clampColumnCount(colCountRaw);
+  const [storedWeights, setStoredWeights] = useUserSetting<number[]>('nexum.panelColumns.widths', []);
+  const colWeights = normaliseWeights(storedWeights, colCount);
+  const colsRef = useRef<HTMLDivElement | null>(null);
+
   const requestFitView = useMapStore((st) => st.requestFitView);
   const [sideWidth, setSideWidth] = useState(() => {
     const v = localStorage.getItem(SIDE_KEY);
@@ -326,11 +348,14 @@ export function SystemPanel() {
       .catch(() => { setWaypointStatus('err'); setTimeout(() => setWaypointStatus('idle'), 2000); });
   };
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  // Each column is its own sortable list, so a drag only ever reorders within
+  // one. The new sequence is written back into the slots that column already
+  // occupied in panelOrder, which leaves the other columns untouched.
+  const handleDragEnd = (columnIds: string[]) => (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const next = arrayMove(panelOrder, panelOrder.indexOf(String(active.id)), panelOrder.indexOf(String(over.id)));
-    setPanelOrder(next);
+    const next = reorderWithinColumn(panelOrder, columnIds, String(active.id), String(over.id));
+    if (next !== panelOrder) setPanelOrder(next);
   };
 
   const onResizeMouseDown = (e: React.MouseEvent) => {
@@ -467,6 +492,44 @@ export function SystemPanel() {
   const floatingIds = Object.keys(floatingPanels)
     .filter((id) => cards[id] && shareVisible(id) && !hiddenPanes.has(id));
 
+  const columnsOfIds = bucketIntoColumns(dockedIds, paneColumns, colCount);
+
+  // Only the columns that actually render, each keeping its real index: an
+  // empty column is skipped, so a divider can sit between columns 0 and 2.
+  const renderedCols = columnsOfIds
+    .map((ids, col) => ({ ids, col }))
+    .filter((c) => c.ids.length > 0);
+
+
+  // Drag a divider: the two columns either side share their combined width,
+  // everything else holds still. Weights rather than pixels, so the split
+  // survives the panel and the window being resized.
+  const startColResize = (left: number, right: number) => (e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const base = colWeights;
+    const cols = colsRef.current?.children ?? null;
+    // Width of the pair as drawn right now, which is what the pointer delta is
+    // measured against.
+    const boxes = cols ? [...cols].filter((el) => el.classList.contains('panel-stack__col')) : [];
+    const li = renderedCols.findIndex((c) => c.col === left);
+    const ri = renderedCols.findIndex((c) => c.col === right);
+    const pairPx = (boxes[li]?.getBoundingClientRect().width ?? 0)
+                 + (boxes[ri]?.getBoundingClientRect().width ?? 0);
+
+    const move = (ev: PointerEvent) =>
+      setStoredWeights(resizeWeights(base, left, right, ev.clientX - startX, pairPx));
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  const moveColumn = (id: string, dir: -1 | 1) => {
+    setPaneColumns((prev) => movePane(prev, id, columnOf(id, prev, colCount) + dir, colCount));
+  };
+
   return (
     <>
     <aside
@@ -500,6 +563,22 @@ export function SystemPanel() {
                 : (sys.name || t('systemPanel.unknownSystem'))}
             </h2>
             <div className="system-panel__actions">
+              {/* Copies the REAL name, never the alias: this is here to be
+                  pasted into the game's search or into chat, where a local
+                  nickname means nothing to anyone. */}
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => {
+                  navigator.clipboard.writeText(sys.name)
+                    .then(() => toast.success(t('systemPanel.nameCopied', { name: sys.name })))
+                    .catch(() => toast.error(t('systemPanel.copyFailed')));
+                }}
+                title={t('systemPanel.copyName')}
+                aria-label={t('systemPanel.copyName')}
+              >
+                <CopyIcon size={14} weight="regular" />
+              </button>
               {sys.eveSystemId && !isShareMode && (
                 <>
                   <button
@@ -524,6 +603,19 @@ export function SystemPanel() {
             {/* Collapse caret pinned to the panel's top-right corner, independent
                 of the Set Destination / Waypoint buttons (which wrap below). */}
             <button type="button" className="icon-btn system-panel__collapse" onClick={toggleInfoCollapsed} title={t('systemPanel.collapseInfo')}>{sideBySide ? '\u2303' : '\u2039'}</button>
+            {/* Dismiss the panel entirely. Collapsing only folds the info column
+                away and leaves the panel in place, so without this the only way
+                out was to click another system — the panel could be narrowed but
+                never actually closed. */}
+            <button
+              type="button"
+              className="icon-btn system-panel__close"
+              onClick={() => selectSystem(null)}
+              title={t('actions.close')}
+              aria-label={t('actions.close')}
+            >
+              <XIcon size={14} weight="bold" />
+            </button>
           </div>
 
           <div className={styles.info}>
@@ -862,40 +954,84 @@ export function SystemPanel() {
         {/* Deliberately NOT in the system-info header: that block collapses, and a
           control people need in order to find their panels must not be able to
           disappear. This bar sits with the stack it configures. */}
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext items={dockedIds} strategy={verticalListSortingStrategy}>
-            <div className="panel-stack">
-              {/* Deliberately NOT in the system-info header: that block
-                  collapses, and the control people need in order to find their
-                  panels must not be able to disappear with it. */}
-              <div className="system-panel__stack-bar">
-                <button
-                  type="button"
-                  className="icon-btn"
-                  onClick={() => setPanesOpen(true)}
-                  data-tooltip={t('systemPanel.panesTitle')}
-                  aria-label={t('systemPanel.panesTitle')}
-                >
-                  <SquaresFourIcon size={14} weight="bold" />
-                </button>
-              </div>
-              {dockedIds.map((id) => (
-                <DraggableCard
-                  key={id}
-                  id={id}
-                  title={panelTitle[id] ?? id}
-                  onUndock={() => undock(id)}
-                  // Signatures and anomalies split a single window-level paste
-                  // between them, so both must stay mounted to receive it even
-                  // when collapsed. See DraggableCard's keepMounted.
-                  keepMounted={id === 'signatures' || id === 'anomalies'}
-                >
-                  {cards[id]}
-                </DraggableCard>
-              ))}
+      <div className="panel-stack">
+        {/* Deliberately NOT in the system-info header: that block
+            collapses, and the control people need in order to find their
+            panels must not be able to disappear with it. */}
+        <div className="system-panel__stack-bar">
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setPanesOpen(true)}
+            data-tooltip={t('systemPanel.panesTitle')}
+            aria-label={t('systemPanel.panesTitle')}
+          >
+            <SquaresFourIcon size={14} weight="bold" />
+          </button>
+        </div>
+        {/* One scroller for the whole stack (.panel-stack, above). Giving each
+            column its own would re-create the nested-scroller trap documented
+            in panels.css: two of them meant the wheel did nothing at all while
+            the cursor sat over the wrong block. */}
+        <div
+          ref={colsRef}
+          className={`panel-stack__cols${colCount > 1 ? ' panel-stack__cols--multi' : ''}`}
+        >
+          {/* An empty column is not rendered at all. Every column takes an equal
+              share of the width, so an empty one shows up as a block of dead
+              space -- a third of the panel, with three columns and panes in two.
+              Nothing is lost by hiding it: panes are moved with the header
+              arrows rather than dropped, so an empty column is not a drop target
+              and has no reason to occupy space. It reappears the moment a pane
+              is moved into it. */}
+          {renderedCols.map(({ ids, col }, i) => (
+            <Fragment key={col}>
+            {i > 0 && (
+              /* Divider belongs to the pair either side of it, so it carries
+                 both real column indices rather than assuming they adjoin.
+                 Double-click resets to an even split -- the only way back once
+                 a column has been dragged narrow. */
+              <div
+                className="panel-stack__divider"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={t('systemPanel.resizeColumns')}
+                data-tooltip={t('systemPanel.resizeColumns')}
+                onPointerDown={startColResize(renderedCols[i - 1].col, col)}
+                onDoubleClick={() => setStoredWeights(equalWeights(colCount))}
+              />
+            )}
+            <div className="panel-stack__col" style={{ flexGrow: colWeights[col] }}>
+              {/* A DndContext per column: a drag stays inside the list it
+                  started in, which is what keeps the existing single-list
+                  sortable working untouched. Moving BETWEEN columns is the
+                  header arrows' job. */}
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd(ids)}>
+                <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+                  {ids.map((id) => (
+                    <DraggableCard
+                      key={id}
+                      id={id}
+                      title={panelTitle[id] ?? id}
+                      onUndock={() => undock(id)}
+                      onMoveColumn={colCount > 1 ? (dir) => moveColumn(id, dir) : undefined}
+                      canMoveLeft={col > 0}
+                      canMoveRight={col < colCount - 1}
+                      // Signatures and anomalies split a single window-level paste
+                      // between them, so both must stay mounted to receive it even
+                      // when collapsed. See DraggableCard's keepMounted.
+                      keepMounted={id === 'signatures' || id === 'anomalies'}
+                    >
+                      {cards[id]}
+                    </DraggableCard>
+                  ))}
+                </SortableContext>
+              </DndContext>
             </div>
-          </SortableContext>
-  </DndContext>
+            </Fragment>
+          ))}
+        </div>
+      </div>
       </div>
     </aside>
 

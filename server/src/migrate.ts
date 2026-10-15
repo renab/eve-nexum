@@ -251,6 +251,48 @@ export async function migrate() {
     -- admin turns them off.
     ALTER TABLE corp_discord_settings ADD COLUMN IF NOT EXISTS notify_chains BOOLEAN NOT NULL DEFAULT TRUE;
 
+    -- Connection-flag presets, so a corp can standardise its signals ("red
+    -- skull always means DO NOT ROLL"). Mirrored corp/alliance pair for the
+    -- same reason the Discord settings are: a map is corp- OR alliance-scoped,
+    -- never both, so a read touches exactly one of these.
+    --
+    -- The list is JSONB rather than a row per preset: it is small, capped, and
+    -- always read and written whole, and its order is part of the value.
+    -- The org's starting UI configuration. An admin arranges their own layout
+    -- and captures it; members inherit anything they have never set themselves.
+    --
+    -- One table with scope_kind/scope_id rather than the corp_* / alliance_*
+    -- pair used by the Discord settings: that shape has to be ALTERed in
+    -- lockstep every time it grows, and this one has no reason to repeat it.
+    --
+    -- Two payloads because the settings live in two places. The settings column
+    -- mirrors users.ui_settings, which members inherit key-by-key whenever they
+    -- have none of their own. The prefs column mirrors the dedicated columns on
+    -- users, which are
+    -- NOT NULL with schema defaults, so "never touched" is indistinguishable
+    -- from "set to the same value" and those can only be applied when an
+    -- account is created.
+    CREATE TABLE IF NOT EXISTS org_ui_defaults (
+      scope_kind TEXT        NOT NULL CHECK (scope_kind IN ('corp', 'alliance')),
+      scope_id   INTEGER     NOT NULL,
+      settings   JSONB       NOT NULL DEFAULT '{}'::jsonb,
+      prefs      JSONB       NOT NULL DEFAULT '{}'::jsonb,
+      updated_by INTEGER     REFERENCES users(id) ON DELETE SET NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (scope_kind, scope_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS corp_flag_presets (
+      corp_id    INTEGER     PRIMARY KEY,
+      presets    JSONB       NOT NULL DEFAULT '[]'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS alliance_flag_presets (
+      alliance_id INTEGER     PRIMARY KEY,
+      presets     JSONB       NOT NULL DEFAULT '[]'::jsonb,
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     -- Alliance mirror of corp_discord_settings, so alliance maps get the same
     -- region filter + per-event-type toggles. A map is corp- OR alliance-scoped,
     -- never both, so its dispatch reads exactly one of these tables.
@@ -464,6 +506,21 @@ export async function migrate() {
     -- live signature pane still reads the real table (merged sigs show on the
     -- map, they just don't inflate anyone's numbers).
     ALTER TABLE map_signatures ADD COLUMN IF NOT EXISTS from_merge BOOLEAN NOT NULL DEFAULT FALSE;
+
+    -- Provenance for rows written by the Thera/Turnur copy button, so the same
+    -- button can later clear up after itself without touching anything a
+    -- person made. NULL on every hand-created signature, which is what makes
+    -- manual rows structurally unreachable by that cleanup.
+    --
+    -- scout_last_seen is the last time the feed still listed this hole. The
+    -- cleanup needs "gone for a while", not "gone right now": eve-scout lists
+    -- a hole until somebody reports it collapsed, so a single stale or partial
+    -- read would otherwise delete live holes out of a chain.
+    ALTER TABLE map_signatures  ADD COLUMN IF NOT EXISTS scout_connection_id TEXT;
+    ALTER TABLE map_signatures  ADD COLUMN IF NOT EXISTS scout_last_seen     TIMESTAMPTZ;
+    ALTER TABLE map_connections ADD COLUMN IF NOT EXISTS scout_connection_id TEXT;
+    CREATE INDEX IF NOT EXISTS idx_map_signatures_scout  ON map_signatures  (scout_connection_id) WHERE scout_connection_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_map_connections_scout ON map_connections (scout_connection_id) WHERE scout_connection_id IS NOT NULL;
     CREATE OR REPLACE VIEW reportable_signatures AS
       SELECT * FROM map_signatures WHERE from_merge = FALSE;
 
@@ -1072,6 +1129,22 @@ export async function migrate() {
     ALTER TABLE jump_plans ADD COLUMN IF NOT EXISTS waypoint_system_ids INTEGER[] NOT NULL DEFAULT '{}';
     ALTER TABLE jump_plans ADD COLUMN IF NOT EXISTS prefer_level        TEXT      NOT NULL DEFAULT 'off';
 
+    -- Saved gate routes (account-scoped). Same shape and reasoning as
+    -- jump_plans above -- inputs only, the route itself is recomputed on load so
+    -- a saved plan reflects the chain as it stands today rather than a snapshot
+    -- of whatever holes were open when it was saved. Named to pair with
+    -- jump_plans (capital jumps) rather than overload "routes", which map_routes
+    -- already uses for saved chains through a single map.
+    CREATE TABLE IF NOT EXISTS route_plans (
+      id          UUID        PRIMARY KEY,
+      owner_id    INTEGER     NOT NULL,
+      name        TEXT        NOT NULL,
+      from_eve_id INTEGER     NOT NULL,
+      to_eve_id   INTEGER     NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_route_plans_owner ON route_plans (owner_id);
+
     -- Corp structures pulled from ESI (esi-corporations.read_structures.v1),
     -- scoped by corporation. Populated by a role-holding member's refresh; any
     -- corp member can read them (e.g. as jump-planner endpoints). The full set
@@ -1201,6 +1274,27 @@ export async function migrate() {
     -- once it's gone from the feed.
     CREATE INDEX IF NOT EXISTS idx_scout_expired_created
       ON scout_expired (created_at);
+
+    -- One person opting out of a map shared with their whole corp or alliance.
+    --
+    -- A map_shares row targets a character, a corp or an alliance, so an org
+    -- grant is ONE row meaning "everyone in it". There is nothing individual
+    -- to delete, and deleting the row would take the map from every member —
+    -- so leaving one is recorded here instead of touching the grant.
+    --
+    -- Keyed on the OWNER, not the user: personal maps are owner-scoped, so a
+    -- map left on your main stays left when you switch to an alt. Both sides
+    -- cascade — the row is meaningless once either the map or the account is
+    -- gone, and re-sharing a map is not supposed to resurrect an old opt-out.
+    CREATE TABLE IF NOT EXISTS map_share_optouts (
+      map_id     UUID        NOT NULL REFERENCES maps(id)   ON DELETE CASCADE,
+      owner_id   INTEGER     NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (map_id, owner_id)
+    );
+    -- Read per map when the owner asks how many have opted out.
+    CREATE INDEX IF NOT EXISTS idx_map_share_optouts_map
+      ON map_share_optouts (map_id);
   `);
 
   await encryptLegacyTokens();

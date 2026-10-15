@@ -1,5 +1,13 @@
 import { Router } from 'express';
 import { esiFetch } from '../utils/esi.js';
+import { getScoutConnections } from './scout.js';
+
+// How long a hole must have been missing from the eve-scout feed before the
+// copy button's cleanup will remove the rows it wrote for it. The feed lists a
+// hole until somebody reports it collapsed, so absence is usually real -- but a
+// single stale or partial read would otherwise delete live holes out of a
+// chain, and carrying a dead hole for an hour is much cheaper than that.
+const SCOUT_GRACE_MINUTES = 60;
 import type { Request, Response } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../middleware/requireAuth.js';
@@ -338,6 +346,12 @@ const pendingK162 = new Map<string, PendingK162>();
 // True when a map has an owning org that could have webhooks (corp or alliance).
 // Personal maps never notify, so we skip them without a DB round-trip.
 function hasOrg(meta: MapMeta): boolean { return meta.corpId != null || meta.allianceId != null; }
+
+/** True when this signature write came from the Thera/Turnur copy button,
+ *  identified by the provenance id that button stamps on every row it writes. */
+function fromScoutFeed(scoutConnectionId: unknown): boolean {
+  return typeof scoutConnectionId === 'string' && scoutConnectionId.length > 0;
+}
 
 export function dispatchK162(meta: MapMeta, sigId: string, systemId: string, actor: string | null): void {
   if (!hasOrg(meta)) {
@@ -3169,7 +3183,7 @@ mapsRouter.delete('/:mapId/systems/:systemId', async (req, res) => {
 
 mapsRouter.post('/:mapId/connections', async (req, res) => {
   const { mapId } = req.params;
-  const { id, sourceId, targetId, sourceHandle, targetHandle, connectionType, massStatus, timeStatus, size, sourceEveId, targetEveId } = req.body;
+  const { id, sourceId, targetId, sourceHandle, targetHandle, connectionType, massStatus, timeStatus, size, type, scoutConnectionId, sourceEveId, targetEveId } = req.body;
 
   const access = await requireMapWrite(res, mapId, req, true);
   if (!access) return;
@@ -3241,14 +3255,22 @@ mapsRouter.post('/:mapId/connections', async (req, res) => {
 
   let inserted = 0;
   try {
+    // `type` (the wormhole code) is accepted on create as well as on update.
+    // It used to be update-only on the reasoning that a fresh connection
+    // carries no type yet -- true when a hole is drawn by hand or by a jump,
+    // but not when it is copied from eve-scout, which knows the code up front.
+    // Patching it afterwards is not an option: this POST is deferred until
+    // both endpoints exist, so a follow-up PATCH can overtake it and be lost.
     const ins = await db.query(
       `INSERT INTO map_connections
          (id, map_id, source_id, target_id, source_handle, target_handle,
-          connection_type, mass_status, time_status, size)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          connection_type, mass_status, time_status, size, wh_type, scout_connection_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT (id) DO NOTHING`,
       [id, mapId, sourceId, targetId, sourceHandle ?? null, targetHandle ?? null,
-       effectiveType, massStatus ?? null, timeStatus ?? null, size ?? 'large'],
+       effectiveType, massStatus ?? null, timeStatus ?? null, size ?? 'large',
+       typeof type === 'string' && type.trim() ? type.trim().toUpperCase() : null,
+       typeof scoutConnectionId === 'string' && scoutConnectionId ? scoutConnectionId : null],
     );
     inserted = ins.rowCount ?? 0;
   } catch (err) {
@@ -4151,12 +4173,22 @@ mapsRouter.post('/:mapId/systems/:systemId/signatures', async (req, res) => {
   if (!access) return;
   if (!(await verifySystemInMap(res, systemId, mapId))) return;
   const { sigId = '', sigType = 'unknown', name = '', notes = '', whType = '', whLeadsTo = '', ghostType = '', massStatus = '', timeStatus = '' } = req.body as Record<string, string>;
+  // Read separately so widening the cast doesn't make every field nullable.
+  const scoutConnectionId = (req.body as { scoutConnectionId?: unknown }).scoutConnectionId;
   const me = authUser(req);
   const row = await createSignature(
-    mapId, systemId, { sigId, sigType, name, notes, whType, whLeadsTo, ghostType, massStatus, timeStatus },
+    mapId, systemId, { sigId, sigType, name, notes, whType, whLeadsTo, ghostType, massStatus, timeStatus,
+      scoutConnectionId: typeof scoutConnectionId === 'string' && scoutConnectionId ? scoutConnectionId : null },
     { userId: me.userId, clientId: req.get('x-client-id') ?? null },
   );
-  if ((whType ?? '').toUpperCase() === 'K162') dispatchK162(access, row.id, systemId, me.characterName);
+  // A K162 copied from the Thera/Turnur feed is bookkeeping, not a sighting:
+  // the hole was already on a public listing and the pilot is looking at the
+  // row as they press the button. Half of a bulk copy is K162 by definition
+  // (every hole is K162 at one end), so dispatching here would fire a notice
+  // per connection. Suppressed on provenance, like the other bulk writes.
+  if (!fromScoutFeed(scoutConnectionId) && (whType ?? '').toUpperCase() === 'K162') {
+    dispatchK162(access, row.id, systemId, me.characterName);
+  }
   res.status(201).json(row);
 });
 
@@ -4173,7 +4205,12 @@ mapsRouter.patch('/:mapId/systems/:systemId/signatures/:sigId', async (req, res)
   );
   // Discord notice fires once on a transition into K162; flush any pending
   // notice the moment the leads-to is known. (Both decided inside updateSignature.)
-  if (shouldDispatch) dispatchK162(access, sigId, systemId, me.characterName);
+  // See the POST above for why a feed-sourced K162 does not notify. A flush
+  // still runs: it only releases a notice an earlier, human K162 already
+  // queued, and that one is worth sending once its destination is known.
+  if (shouldDispatch && !fromScoutFeed(updates.scoutConnectionId)) {
+    dispatchK162(access, sigId, systemId, me.characterName);
+  }
   if (shouldFlush) flushK162(sigId);
   res.json({ ok: true });
 });
@@ -4191,6 +4228,77 @@ mapsRouter.delete('/:mapId/systems/:systemId/signatures/:sigId', async (req, res
 // content anywhere in the chain without opening every system's sig pane —
 // powers the watchlist (wh_type matching) and the content filter (sig type +
 // name). Returns only the (systemId, sigType, name, whType) tuple per sig.
+// Clean up after the Thera/Turnur copy button: drop the rows it wrote for
+// holes the feed no longer lists, and sever the connections behind them.
+//
+// Server-side on purpose. It reads the feed itself rather than taking a list
+// of live ids from the caller, so a stale or doctored client cannot talk the
+// server into deleting a chain.
+mapsRouter.post('/:mapId/scout-cleanup', async (req, res) => {
+  const { mapId } = req.params;
+  const access = await requireMapContentWrite(res, mapId, req);
+  if (!access) return;
+
+  const hub = String((req.body as { hub?: unknown }).hub ?? '');
+  if (hub !== 'Thera' && hub !== 'Turnur') {
+    res.status(400).json({ error: 'hub must be Thera or Turnur' });
+    return;
+  }
+
+  const live = (await getScoutConnections())
+    .filter((c) => c.outSystemName === hub)
+    .map((c) => c.id);
+
+  // Anything still listed had its clock reset by the copy itself; this covers
+  // rows on systems the copy skipped this time round.
+  await db.query(
+    `UPDATE map_signatures s SET scout_last_seen = NOW()
+       FROM map_systems ms
+      WHERE s.system_id = ms.id AND ms.map_id = $1
+        AND s.scout_connection_id = ANY($2::text[])`,
+    [mapId, live],
+  );
+
+  // Delete only rows that are ALL of: ours to begin with, absent from the
+  // feed, absent for long enough that a glitchy read cannot be the cause, and
+  // untouched since we wrote them.
+  //
+  // "Untouched" is name and notes still empty and the type still wormhole --
+  // the fields a person fills in. It is deliberately conservative: a row
+  // somebody has annotated stays, even if its hole really is gone, because
+  // leaving a dead hole on a map costs a scout one delete and removing a live
+  // note costs them work they cannot get back.
+  const { rows: removed } = await db.query<{ id: string; scout_connection_id: string }>(
+    `DELETE FROM map_signatures s
+       USING map_systems ms
+      WHERE s.system_id = ms.id AND ms.map_id = $1
+        AND s.scout_connection_id IS NOT NULL
+        AND NOT (s.scout_connection_id = ANY($2::text[]))
+        AND s.scout_last_seen < NOW() - ($3 || ' minutes')::interval
+        AND s.name = '' AND s.notes = '' AND s.sig_type = 'wormhole'
+      RETURNING s.id, s.scout_connection_id`,
+    [mapId, live, SCOUT_GRACE_MINUTES],
+  );
+
+  // The connection is severed, not deleted -- same treatment any wormhole gets
+  // when its backing signature goes, so a collapsed Thera exit reads like a
+  // collapsed hole rather than vanishing out of the chain.
+  const goneIds = [...new Set(removed.map((r) => r.scout_connection_id))];
+  const { rowCount: broken } = goneIds.length === 0
+    ? { rowCount: 0 }
+    : await db.query(
+        `UPDATE map_connections SET broken = TRUE
+          WHERE map_id = $1 AND scout_connection_id = ANY($2::text[]) AND broken = FALSE`,
+        [mapId, goneIds],
+      );
+
+  if (removed.length > 0 || (broken ?? 0) > 0) {
+    await touchMap(mapId);
+    publishToMap(mapId, { type: 'map.resync', actor: req.get('x-client-id') ?? null });
+  }
+  res.json({ removed: removed.length, broken: broken ?? 0 });
+});
+
 mapsRouter.get('/:mapId/signatures', async (req, res) => {
   const { mapId } = req.params;
   const access = await getMapAccess(mapId, req);
@@ -4504,7 +4612,17 @@ mapsRouter.get('/:mapId/shares', async (req, res) => {
     .filter((x): x is number => x != null);
   const names = await resolveEntityNames(ids);
 
+  // How many accounts have taken this map off their own list. Only meaningful
+  // for an org grant — a personal one is left by deleting the grant, so there
+  // would be no row here to count. Reported so the owner can tell "nobody is
+  // using this" from "nobody can see it".
+  const { rows: outRows } = await db.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM map_share_optouts WHERE map_id = $1`, [mapId],
+  );
+  const optedOut = Number(outRows[0]?.n ?? 0);
+
   res.json({
+    optedOut,
     shares: rows.map((r) => {
       const kind = r.targetCharacterId != null ? 'character' : r.targetCorpId != null ? 'corp' : 'alliance';
       const targetId = (r.targetCharacterId ?? r.targetCorpId ?? r.targetAllianceId)!;
@@ -4670,7 +4788,46 @@ mapsRouter.delete('/:mapId/shares/mine', async (req, res) => {
     `DELETE FROM map_shares WHERE map_id = $1 AND target_character_id = $2`,
     [mapId, callerChar],
   );
-  if (!rowCount) { res.status(404).json({ error: 'No personal share to leave' }); return; }
+  if (rowCount) { res.json({ ok: true, kind: 'share-removed' }); return; }
+
+  // No personal grant. The map may still reach them through a corp or alliance
+  // grant, which is ONE row meaning everyone in the org — there is nothing
+  // individual to delete, and deleting it would take the map from every
+  // member. Record the opt-out instead, so leaving means the same thing to the
+  // person either way and the owner can see it happened.
+  //
+  // Confirm they can actually see the map first, via the same access check
+  // every other read uses, so this can't be used to probe for map ids or to
+  // accumulate rows against maps the caller has nothing to do with.
+  const access = await getMapAccess(mapId, req);
+  if (!access || access.accessKind !== 'shared') {
+    res.status(404).json({ error: 'No share to leave' }); return;
+  }
+  const ownerId = await resolveOwnerId(req);
+  if (ownerId == null) { res.status(400).json({ error: 'No account owner' }); return; }
+  await db.query(
+    `INSERT INTO map_share_optouts (map_id, owner_id) VALUES ($1, $2)
+     ON CONFLICT (map_id, owner_id) DO NOTHING`,
+    [mapId, ownerId],
+  );
+  res.json({ ok: true, kind: 'opted-out' });
+});
+
+// POST /api/maps/:mapId/shares/mine/restore — undo the opt-out above, putting
+// an org-shared map back in this account's list. Only ever deletes this
+// account's own row, so it cannot affect anyone else; a no-op if they never
+// opted out. There is deliberately no counterpart for a PERSONAL share: that
+// one deleted the grant itself, and only the owner can give it back.
+mapsRouter.post('/:mapId/shares/mine/restore', async (req, res) => {
+  const { mapId } = req.params;
+  if (!UUID_RE.test(mapId)) { res.status(404).json({ error: 'Map not found' }); return; }
+  if (!req.session.userId) { res.status(401).json({ error: 'Not authenticated' }); return; }
+  const ownerId = await resolveOwnerId(req);
+  if (ownerId == null) { res.status(400).json({ error: 'No account owner' }); return; }
+  await db.query(
+    `DELETE FROM map_share_optouts WHERE map_id = $1 AND owner_id = $2`,
+    [mapId, ownerId],
+  );
   res.json({ ok: true });
 });
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type ReactNode, type CSSProperties } from 'react';
+import { useState, useEffect, useMemo, useRef, type ReactNode, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { timeAgo, jumps } from '../../i18n/format';
@@ -20,6 +20,7 @@ import { ApiKeysModal } from './ApiKeysModal';
 import { LanguageSwitcher } from './LanguageSwitcher';
 import { CharacterSwitcher } from './CharacterSwitcher';
 import { HeatmapMenu } from './HeatmapMenu';
+import { ChainExitsMenu } from './ChainExitsMenu';
 import { WhTypeChartModal } from './WhTypeChartModal';
 import { KillLogPanel } from './KillLogPanel';
 import { JumpPlannerModal } from './JumpPlannerModal';
@@ -38,7 +39,6 @@ import {
   ArrowCounterClockwiseIcon,
   ChartBarIcon,
   ClockCountdownIcon,
-  ColumnsIcon,
   GearIcon,
   DiscordLogoIcon,
   DotsSixVerticalIcon,
@@ -241,8 +241,6 @@ export function Toolbar() {
   const maps            = useMapStore((s) => s.maps);
   const maxMaps         = useMapStore((s) => s.maxMaps);
   const iskMapsEnabled  = useMapStore((s) => s.iskMapsEnabled);
-  const panelSideBySide = useMapStore((s) => s.panelSideBySide);
-  const setPanelSideBySide = useMapStore((s) => s.setPanelSideBySide);
   const setMapSettingsOpen = useMapStore((s) => s.setMapSettingsOpen);
   const maxCorpMaps     = useMapStore((s) => s.maxCorpMaps);
   const corpMapCount    = useMapStore((s) => s.corpMapCount);
@@ -254,6 +252,7 @@ export function Toolbar() {
   const requestFitView  = useMapStore((s) => s.requestFitView);
   const deleteMap       = useMapStore((s) => s.deleteMap);
   const leaveShare      = useMapStore((s) => s.leaveShare);
+  const restoreShare    = useMapStore((s) => s.restoreShare);
   const mapOptionsOpen  = useMapStore((s) => s.mapOptionsOpen);
   const setMapOptionsOpen = useMapStore((s) => s.setMapOptionsOpen);
   const trackJumps      = useMapStore((s) => s.trackJumps);
@@ -284,6 +283,25 @@ export function Toolbar() {
   // A map shared with this character specifically (not via corp/alliance) can be
   // dropped from their own list — gates the "Leave shared map" action below.
   const activeCanLeave = !!maps.find((m) => m.id === activeMapId)?.canLeaveShare;
+  // Leaving an org-shared map records an opt-out server-side rather than
+  // deleting the grant (which belongs to the whole corp). The map keeps coming
+  // back in the payload flagged hiddenByMe, which is what lets the switcher
+  // offer it back — and lets the owner see that someone left.
+  const [showHidden, setShowHidden] = useState(false);
+  // Only ever hide a map shared with you. Your own are deleted, and a personal
+  // grant is properly left instead, which frees it on the owner's list.
+  const activeCanHide = activeIsShared && !activeCanLeave
+    && !maps.find((m) => m.id === activeMapId)?.hiddenByMe;
+  // A hidden map that is somehow still active must stay listed, or the
+  // switcher would show nothing selected.
+  const visibleMaps = useMemo(
+    () => maps.filter((m) => !m.hiddenByMe || m.id === activeMapId),
+    [maps, activeMapId],
+  );
+  const hiddenMaps = useMemo(
+    () => maps.filter((m) => m.hiddenByMe && m.id !== activeMapId),
+    [maps, activeMapId],
+  );
   const canManageMaps = useCanCreateMaps();
   const canManageAllianceMaps = useCanManageAllianceMaps();
   // Corp maps exist under corp OR alliance mode (a corp inside the alliance).
@@ -447,7 +465,7 @@ export function Toolbar() {
 
           {showMaps && (
             <div className="map-dropdown" onMouseLeave={() => setShowMaps(false)}>
-              {[...maps].sort((a, b) => {
+              {[...visibleMaps].sort((a, b) => {
                 // Tier ordering: own personal → corp → alliance → shared-with-me.
                 // Inside a tier, alphabetical by name.
                 const tier = (m: typeof a) => m.sharedWithMe ? 3 : m.isAllianceMap ? 2 : m.isCorpMap ? 1 : 0;
@@ -523,6 +541,37 @@ export function Toolbar() {
                 <button className="map-dropdown__item map-dropdown__item--danger" onClick={() => { setShowMaps(false); setLeaveConfirm(true); }}>
                   {t('toolbar.leaveThisMap')}
                 </button>
+              )}
+              {activeCanHide && (
+                <button
+                  className="map-dropdown__item map-dropdown__item--danger"
+                  data-tooltip={t('toolbar.hideThisMapHint')}
+                  onClick={() => { setShowMaps(false); void handleLeaveShare(); }}
+                >
+                  {t('toolbar.hideThisMap')}
+                </button>
+              )}
+              {hiddenMaps.length > 0 && (
+                <>
+                  <div className="map-dropdown__divider" />
+                  <button
+                    className="map-dropdown__item map-dropdown__item--action"
+                    onClick={() => setShowHidden((v) => !v)}
+                  >
+                    {t('toolbar.hiddenMaps', { count: hiddenMaps.length })}
+                  </button>
+                  {showHidden && hiddenMaps.map((m) => (
+                    <button
+                      key={m.id}
+                      className="map-dropdown__item map-dropdown__item--hidden"
+                      onClick={() => void restoreShare(m.id)}
+                      data-tooltip={t('toolbar.unhideMapHint')}
+                    >
+                      {m.name}
+                      <span className="map-dropdown__owner">{t('toolbar.unhideMap')}</span>
+                    </button>
+                  ))}
+                </>
               )}
             </div>
           )}
@@ -607,6 +656,8 @@ export function Toolbar() {
             forth while deciding which layout suits them. */}
 
         <HeatmapMenu />
+
+        <ChainExitsMenu />
 
         <button
           className={`toolbar__toggle toolbar__toggle--icon toolbar__toggle--prominent${mapOptionsOpen ? ' toolbar__toggle--on' : ''}`}
@@ -766,15 +817,6 @@ export function Toolbar() {
           aria-label={t('mapSidebar.settings')}
         >
           <GearIcon size={18} weight="regular" />
-        </button>
-        <button
-          className={`toolbar__toggle toolbar__toggle--icon toolbar__toggle--prominent${panelSideBySide ? ' toolbar__toggle--on' : ''}`}
-          onClick={() => setPanelSideBySide(!panelSideBySide)}
-          aria-pressed={panelSideBySide}
-          data-tooltip={panelSideBySide ? t('toolbar.layoutBesideTooltip') : t('toolbar.layoutBelowTooltip')}
-          aria-label={t('mapSidebar.panelLayout')}
-        >
-          <ColumnsIcon size={18} weight="regular" />
         </button>
         <button
           className={`toolbar__toggle toolbar__toggle--icon toolbar__toggle--prominent${trackJumps ? ' toolbar__toggle--on' : ''}`}

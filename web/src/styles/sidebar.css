@@ -7,14 +7,14 @@
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-10);
   /* Every control is an atomic flex item (flex-shrink: 0), so when the row runs
      out of width items wrap to the next line rather than squishing, clipping, or
      stacking — reordering can never produce an overlap. Keeps the bar usable on
      vertical monitors / narrow laptops. */
   flex-wrap: wrap;
-  row-gap: 6px;
-  padding: 4px 16px;
+  row-gap: var(--sp-6);
+  padding: var(--sp-4) var(--sp-16);
   min-height: 48px;
   background: var(--surface-well);
   border-bottom: 1px solid var(--border);
@@ -33,7 +33,7 @@
 .toolbar__item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   flex-shrink: 0;
   cursor: grab;
   border-radius: 6px;
@@ -64,7 +64,7 @@
 .toolbar__group {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 
 /* The reset-layout affordance is pinned to the far right — it's a layout meta
@@ -78,7 +78,7 @@
    gap so more fits per row before wrapping. */
 @media (max-width: 1600px) {
   .toolbar {
-    column-gap: 8px;
+    column-gap: var(--sp-8);
   }
 }
 
@@ -91,7 +91,7 @@
   align-items: center;
   background: none;
   border: none;
-  padding: 0 6px;
+  padding: 0 var(--sp-6);
   cursor: pointer;
   color: var(--danger);
   animation: nexum-update-blink 1s steps(1, end) infinite;
@@ -108,7 +108,7 @@
 .toolbar__brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-10);
   /* Stays in the top row even when the bar grows for a dragged 2nd-row section. */
   align-self: flex-start;
   height: 48px;
@@ -124,7 +124,7 @@
 .toolbar__option {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
 .toolbar__option-label {
@@ -142,7 +142,7 @@
   cursor: pointer;
   font-size: calc(16px * var(--font-scale, 1));
   font-weight: 600;
-  padding: 3px 10px;
+  padding: var(--sp-3) var(--sp-10);
 
   &:hover { background: var(--surface-overlay); color: var(--text-default); }
 
@@ -159,7 +159,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 5px;
+    padding: var(--sp-5);
     line-height: 1;
   }
 
@@ -181,7 +181,7 @@
 .toolbar__discord {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
   text-decoration: none;
 }
 .toolbar__discord svg { display: block; }
@@ -194,7 +194,7 @@
   font-weight: 600;
   letter-spacing: 0.02em;
   outline: none;
-  padding: 2px 4px;
+  padding: var(--sp-2) var(--sp-4);
   border-radius: 4px;
   min-width: 120px;
 
@@ -204,7 +204,7 @@
 
 .toolbar__stats {
   display: flex;
-  gap: 16px;
+  gap: var(--sp-16);
   font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-bright);
 
@@ -227,8 +227,8 @@
 .toolbar__proximity {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
+  gap: var(--sp-6);
+  padding: var(--sp-4) var(--sp-10);
   border: 1px solid var(--border-strong);
   border-radius: 4px;
   font-size: calc(13px * var(--font-scale, 1));
@@ -285,7 +285,7 @@
 .toolbar__user {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-10);
   flex-shrink: 0;
 }
 
@@ -318,7 +318,7 @@
 .toolbar__char-info {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: var(--sp-1);
 }
 
 .toolbar__char-name {
@@ -338,12 +338,12 @@
 .toolbar__char-sub {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 .toolbar__char-system {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--sp-3);
   font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
   white-space: nowrap;
@@ -390,10 +390,10 @@
   border: 1px solid var(--border);
   border-radius: 6px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.6);
-  padding: 4px;
+  padding: var(--sp-4);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-2);
 }
 .character-switcher__row { display: flex; align-items: center; border-radius: 4px; }
 .character-switcher__row:hover { background: var(--surface-raised); }
@@ -401,10 +401,10 @@
 .character-switcher__switch {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   flex: 1;
   min-width: 0;
-  padding: 5px 8px;
+  padding: var(--sp-5) var(--sp-8);
   background: transparent;
   border: none;
   border-radius: 4px;
@@ -459,8 +459,8 @@
 .character-switcher__add {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: var(--sp-8);
+  padding: var(--sp-6) var(--sp-8);
   margin-top: 2px;
   border-top: 1px solid var(--surface-hover);
   color: var(--accent);
@@ -485,15 +485,15 @@
 .toolbar__server-status {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 0 12px;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-12);
   border-right: 1px solid var(--surface-hover);
 }
 
 .toolbar__server-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
 .toolbar__status-dot {
@@ -515,7 +515,7 @@
     color: var(--text-primary);
     font-size: calc(13px * var(--font-scale, 1));
     white-space: nowrap;
-    padding: 3px 7px;
+    padding: var(--sp-3) var(--sp-7);
     border-radius: 4px;
     border: 1px solid var(--border);
     pointer-events: none;
@@ -552,6 +552,103 @@
 .toolbar__toggle-led--off { background: var(--danger); box-shadow: 0 0 4px #e05a5a66; }
 
 /* Heatmap toolbar control — icon button + horizontal popover (type + intensity). */
+/* ── Chain Exits toolbar menu ──────────────────────────────────────────────
+   Its own prefix on purpose: .chain-exits__list / __row / __name / __jumps are
+   already defined TWICE, in this file and in panes.css, for two unrelated
+   widgets with different rules -- whichever stylesheet loads later wins. A
+   third consumer would be a third way to break. Only the colours are shared,
+   and those come from the component. */
+.chain-exits-menu { position: relative; display: inline-flex; }
+
+/* Counts sit beside the icon rather than overlaying it: three numbers don't fit
+   in a corner dot, and the whole point is that they're readable at a glance. */
+.chain-exits-menu__badge {
+  display: inline-flex;
+  gap: var(--sp-3);
+  margin-left: 5px;
+  font-size: calc(11px * var(--font-scale, 1));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.chain-exits-menu__pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 1000;
+  width: 290px;
+  max-height: 70vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  background: var(--surface-well);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.6);
+  padding: var(--sp-10);
+}
+
+.chain-exits-menu__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chain-exits-menu__chip {
+  font-size: calc(11px * var(--font-scale, 1));
+  padding: var(--sp-2) var(--sp-8);
+  border: 1px solid;
+  border-radius: 999px;
+  background: rgba(8, 9, 15, 0.4);
+}
+.chain-exits-menu__chip strong { font-weight: 700; margin-right: 3px; }
+
+.chain-exits-menu__hint {
+  font-size: calc(11px * var(--font-scale, 1));
+  color: var(--text-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.chain-exits-menu__empty {
+  font-size: calc(12px * var(--font-scale, 1));
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.chain-exits-menu__favs,
+.chain-exits-menu__exits {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.chain-exits-menu__exits { max-height: 180px; overflow-y: auto; }
+
+.chain-exits-menu__fav,
+.chain-exits-menu__exit {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-6);
+  padding: var(--sp-4) var(--sp-8);
+  font-size: calc(12px * var(--font-scale, 1));
+  border-bottom: 1px solid var(--surface-panel);
+}
+.chain-exits-menu__fav:last-child,
+.chain-exits-menu__exit:last-child { border-bottom: none; }
+
+.chain-exits-menu__fav-name { flex: 1; min-width: 0; font-weight: 600; }
+.chain-exits-menu__fav-route { white-space: nowrap; }
+.chain-exits-menu__fav-route--none,
+.chain-exits-menu__fav-route--in { color: var(--text-faint); font-style: italic; }
+.chain-exits-menu__via { color: var(--text-faint); }
+
+.chain-exits-menu__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  align-self: center;
+}
+.chain-exits-menu__exit-name { flex: 1; min-width: 0; }
+
 .heatmap-menu { position: relative; display: inline-flex; }
 .heatmap-menu__pop {
   position: absolute;
@@ -560,13 +657,13 @@
   z-index: 1000;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   white-space: nowrap;
   background: var(--surface-well);
   border: 1px solid var(--border);
   border-radius: 6px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.6);
-  padding: 8px 10px;
+  padding: var(--sp-8) var(--sp-10);
 }
 /* Labels kept for screen readers (htmlFor association) but visually hidden —
    the select value and the slider/percentage already convey what they control. */
@@ -588,7 +685,7 @@
   color: var(--text-default);
   font-family: inherit;
   font-size: calc(12px * var(--font-scale, 1));
-  padding: 3px 6px;
+  padding: var(--sp-3) var(--sp-6);
   cursor: pointer;
 }
 .heatmap-menu__slider { width: 110px; }
@@ -598,7 +695,7 @@
   border-radius: 4px;
   color: var(--text-default);
   font-size: calc(11px * var(--font-scale, 1));
-  padding: 2px 6px;
+  padding: var(--sp-2) var(--sp-6);
   min-width: 46px;
   cursor: pointer;
 }
@@ -651,10 +748,48 @@
 .map-sidebar__content {
   display: flex;
   flex-direction: column;
-  padding: 16px 12px;
-  gap: 8px;
+  padding: var(--sp-16) var(--sp-12);
+  gap: var(--sp-8);
   overflow-y: auto;
+  /* This list is taller than the panel it sits in -- the sidebar is bounded by
+     the MAP's height (see .layout__map), so with the docked panel open there can
+     be several hundred pixels of settings below the fold. It scrolled fine, but
+     nothing SAID so: the last row cut off at the panel edge and read as "the
+     rest is hidden underneath the panel".
+
+     The cue is a shadow at whichever edge has more content past it, not a
+     scrollbar. A scrollbar cannot be relied on here: macOS overlay scrollbars
+     take no layout width and stay hidden until you scroll, which is the state
+     that caused the confusion, and whether they show at all is the viewer's OS
+     setting rather than ours. The gradients below need no JS and no scroll
+     listener -- the `local` layers scroll with the content and uncover the
+     `scroll` shadow layers only while there is something to scroll to, so the
+     shadow disappears at each end on its own.
+
+     The scrollbar styling is kept as well, for viewers whose system does show
+     classic bars. It just isn't the thing being depended on. */
+  background-color: var(--surface-well);
+  background-image:
+    linear-gradient(var(--surface-well) 30%, rgba(0, 0, 0, 0)),
+    linear-gradient(rgba(0, 0, 0, 0), var(--surface-well) 70%),
+    radial-gradient(farthest-side at 50% 0,    rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0)),
+    radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0));
+  background-position: 0 0, 0 100%, 0 0, 0 100%;
+  background-size: 100% 24px, 100% 24px, 100% 10px, 100% 10px;
+  background-repeat: no-repeat;
+  background-attachment: local, local, scroll, scroll;
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-muted) transparent;
 }
+.map-sidebar__content::-webkit-scrollbar { width: 10px; }
+.map-sidebar__content::-webkit-scrollbar-track { background: transparent; }
+.map-sidebar__content::-webkit-scrollbar-thumb {
+  background: var(--surface-muted);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.map-sidebar__content::-webkit-scrollbar-thumb:hover { background: #3d5f86; }
 
 .map-sidebar__section-title {
   font-size: calc(13px * var(--font-scale, 1));
@@ -673,7 +808,7 @@
   width: 100%;
   background: transparent;
   border: none;
-  padding: 4px 0;
+  padding: var(--sp-4) 0;
   margin: 0;
   cursor: pointer;
   font-family: inherit;
@@ -693,8 +828,8 @@
 .map-sidebar__section-body {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding-top: 6px;
+  gap: var(--sp-6);
+  padding-top: var(--sp-6);
 }
 
 .map-sidebar__section--collapsed {
@@ -706,7 +841,7 @@
   border: 1px solid var(--border);
   color: var(--text-default);
   font-size: calc(13px * var(--font-scale, 1));
-  padding: 4px 8px;
+  padding: var(--sp-4) var(--sp-8);
   border-radius: 4px;
   cursor: pointer;
 
@@ -728,7 +863,7 @@
 .map-sidebar__zoom {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 
 .map-sidebar__zoom-slider {
@@ -744,7 +879,7 @@
   color: var(--text-secondary);
   font-size: calc(12px * var(--font-scale, 1));
   font-variant-numeric: tabular-nums;
-  padding: 2px 6px;
+  padding: var(--sp-2) var(--sp-6);
   cursor: pointer;
   min-width: 48px;
   text-align: center;
@@ -756,7 +891,7 @@
   font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-subtle);
   line-height: 1.4;
-  padding: 4px 0 0;
+  padding: var(--sp-4) 0 0;
 }
 
 .map-sidebar__hint--error {
@@ -766,13 +901,13 @@
 .chain-exits__chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 2px 0;
+  gap: var(--sp-6);
+  padding: var(--sp-2) 0;
 }
 
 .chain-exits__chip {
   font-size: calc(11px * var(--font-scale, 1));
-  padding: 2px 8px;
+  padding: var(--sp-2) var(--sp-8);
   border: 1px solid;
   border-radius: 999px;
   background: rgba(8, 9, 15, 0.4);
@@ -786,7 +921,7 @@
 .chain-exits__nearest {
   font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-primary);
-  padding: 4px 8px;
+  padding: var(--sp-4) var(--sp-8);
   background: rgba(110, 160, 255, 0.06);
   border-left: 2px solid var(--accent-bright);
   border-radius: 0 3px 3px 0;
@@ -805,8 +940,8 @@
 .chain-exits__row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
+  gap: var(--sp-6);
+  padding: var(--sp-3) var(--sp-8);
   font-size: calc(12px * var(--font-scale, 1));
   border-bottom: 1px solid var(--surface-panel);
 }
@@ -839,7 +974,7 @@
 .map-shares__picker {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 
 .map-shares__input {
@@ -847,7 +982,7 @@
   background: var(--surface-base);
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 5px 8px;
+  padding: var(--sp-5) var(--sp-8);
   font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-primary);
   outline: none;
@@ -884,7 +1019,7 @@
 .map-shares__staged-head { width: 100%; font-size: calc(11px * var(--font-scale, 1)); color: var(--text-muted); }
 .map-shares__chip {
   display: inline-flex; align-items: center; gap: 5px;
-  padding: 2px 4px 2px 3px;
+  padding: var(--sp-2) var(--sp-4) var(--sp-2) var(--sp-3);
   background: var(--surface-panel); border: 1px solid #263352; border-radius: 12px;
   font-size: calc(11px * var(--font-scale, 1)); color: var(--text-primary);
   max-width: 100%;
@@ -900,7 +1035,7 @@
 .map-shares__grant-login {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
   font-size: calc(12px * var(--font-scale, 1));
   color: #a8b6cc;
   cursor: pointer;
@@ -910,15 +1045,15 @@
 .map-shares__list {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--sp-3);
   margin-top: 4px;
 }
 
 .map-shares__row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 6px;
+  gap: var(--sp-6);
+  padding: var(--sp-3) var(--sp-6);
   background: var(--surface-base);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -936,7 +1071,7 @@
 
 .map-shares__kind {
   font-size: calc(10px * var(--font-scale, 1));
-  padding: 1px 5px;
+  padding: var(--sp-1) var(--sp-5);
   border-radius: 3px;
   font-weight: 600;
   flex-shrink: 0;
@@ -967,7 +1102,7 @@
   border: 1px solid #3a2030;
   color: var(--danger);
   border-radius: 3px;
-  padding: 2px 4px;
+  padding: var(--sp-2) var(--sp-4);
   cursor: pointer;
   line-height: 0;
   flex-shrink: 0;
@@ -982,7 +1117,7 @@
 .map-shares__access {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   margin: 2px 0;
 }
 
@@ -999,7 +1134,7 @@
 /* Per-row badge showing whether a grant is view-only or editable. */
 .map-shares__access-badge {
   font-size: calc(10px * var(--font-scale, 1));
-  padding: 1px 5px;
+  padding: var(--sp-1) var(--sp-5);
   border-radius: 3px;
   font-weight: 600;
   flex-shrink: 0;
@@ -1021,14 +1156,14 @@
 .watchlist {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-6);
   margin-top: 2px;
 }
 
 .watchlist__sound {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
   font-size: calc(12px * var(--font-scale, 1));
   color: #aeb9d6;
   cursor: pointer;
@@ -1038,20 +1173,20 @@
 .watchlist__quickadd {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-4);
 }
 
 .watchlist__chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--sp-4);
 }
 
 .watchlist__chip {
   background: var(--surface-base);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 2px 9px;
+  padding: var(--sp-2) 9px;
   font-size: calc(11px * var(--font-scale, 1));
   color: #9aa6c4;
   cursor: pointer;
@@ -1069,7 +1204,7 @@
 .watchlist__list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--sp-12);
   margin-top: 2px;
 }
 
@@ -1085,7 +1220,7 @@
 /* Empty-ungrouped affordance, shown only while dragging so a grouped row can be
    dropped back out. */
 .watchlist__drop-hint {
-  padding: 10px;
+  padding: var(--sp-10);
   text-align: center;
   font-size: calc(12px * var(--font-scale, 1));
   color: var(--muted, #8a98b8);
@@ -1110,15 +1245,15 @@
 .watchlist__group-head {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-4);
   background: var(--surface-panel);
-  padding: 4px 6px;
+  padding: var(--sp-4) var(--sp-6);
 }
 .watchlist__group-toggle {
   flex: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   background: none;
   border: none;
   color: var(--text-primary);
@@ -1147,7 +1282,7 @@
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--sp-3);
   color: var(--success-bright);
   font-weight: 600;
   font-size: calc(12px * var(--font-scale, 1));
@@ -1162,7 +1297,7 @@
   border: none;
   color: var(--text-dim);
   cursor: pointer;
-  padding: 2px 4px;
+  padding: var(--sp-2) var(--sp-4);
 }
 .watchlist__group-btn:hover:not(:disabled) { color: #a0ccf8; }
 .watchlist__group-btn:disabled { opacity: 0.4; cursor: default; }
@@ -1176,13 +1311,13 @@
 .watchlist__actions .map-sidebar__action { flex: 1 1 auto; min-width: 90px; justify-content: center; }
 .watchlist__import {
   margin-top: 8px;
-  padding: 8px;
+  padding: var(--sp-8);
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface-base);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-6);
 }
 .watchlist__import-head { display: flex; gap: 6px; }
 .watchlist__import-name {
@@ -1194,7 +1329,7 @@
   color: var(--text-primary);
   font-family: inherit;
   font-size: calc(13px * var(--font-scale, 1));
-  padding: 5px 8px;
+  padding: var(--sp-5) var(--sp-8);
   outline: none;
 }
 .watchlist__import-name:focus { border-color: var(--accent-bright); }
@@ -1212,14 +1347,14 @@
   color: var(--text-primary);
   font-family: inherit;
   font-size: calc(13px * var(--font-scale, 1));
-  padding: 6px 8px;
+  padding: var(--sp-6) var(--sp-8);
   outline: none;
 }
 .watchlist__import-text:focus { border-color: var(--accent-bright); }
 .watchlist__import-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
 }
 .watchlist__import-room { flex: 1; color: #6a8ab0; font-size: calc(12px * var(--font-scale, 1)); }
 
@@ -1229,8 +1364,8 @@
 .watchlist__row {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px;
+  gap: var(--sp-6);
+  padding: var(--sp-8);
   border: 1px solid var(--surface-overlay);
   border-radius: 6px;
   background: rgba(255,255,255,0.02);
@@ -1240,7 +1375,7 @@
 .watchlist__row-bottom {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
   /* Wrap onto extra rows on a narrow (docked) panel instead of shrinking the
      controls to nothing. Kicks in only when they no longer fit side by side —
      wide layouts are unchanged. Paired with the min-widths below, since a
@@ -1254,13 +1389,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: var(--sp-5);
   width: 100%;
   margin-top: 6px;
   background: transparent;
   border: 1px solid #3a2030;
   border-radius: 4px;
-  padding: 4px 8px;
+  padding: var(--sp-4) var(--sp-8);
   font-size: calc(11px * var(--font-scale, 1));
   color: var(--danger);
   cursor: pointer;
@@ -1276,13 +1411,13 @@
 .watchlist__criteria {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-6);
   margin-top: 6px;
 }
 .watchlist__criterion {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
   flex-wrap: wrap;
 }
 /* Layout-only — the themed <Select> owns the control styling. */
@@ -1293,12 +1428,12 @@
   align-self: flex-start;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-4);
   background: none;
   border: 1px dashed #2a3550;
   border-radius: 4px;
   /* Same height/type size as the criteria dropdowns above it. */
-  padding: 4px 8px;
+  padding: var(--sp-4) var(--sp-8);
   font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-muted);
   cursor: pointer;
@@ -1312,7 +1447,7 @@
   flex: none;
   background: none; border: none;
   color: var(--text-dim); cursor: grab; user-select: none;
-  padding: 0 2px;
+  padding: 0 var(--sp-2);
   font-size: calc(13px * var(--font-scale, 1)); line-height: 1;
 }
 .watchlist__drag-handle:hover { color: var(--text-subtle); }
@@ -1365,7 +1500,7 @@
   background: var(--surface-base);
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 4px 6px;
+  padding: var(--sp-4) var(--sp-6);
   font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-primary);
   outline: none;
@@ -1417,12 +1552,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  gap: var(--sp-3);
   background: rgba(74,222,128,0.10);
   border: 1px solid #2c6e49;
   color: var(--success-bright);
   border-radius: 4px;
-  padding: 3px 5px;
+  padding: var(--sp-3) var(--sp-5);
   cursor: pointer;
   line-height: 0;
 }
@@ -1443,20 +1578,20 @@
 .watchlist__matches {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 4px 0 2px 26px;
+  gap: var(--sp-2);
+  padding: var(--sp-4) 0 var(--sp-2) 26px;
 }
 
 .watchlist__match {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
   width: 100%;
   text-align: start;
   background: transparent;
   border: none;
   border-radius: 4px;
-  padding: 3px 6px;
+  padding: var(--sp-3) var(--sp-6);
   font-size: calc(12px * var(--font-scale, 1));
   color: #aeb9d6;
   cursor: pointer;
@@ -1472,7 +1607,7 @@
   border: 1px solid #3a2030;
   color: var(--danger);
   border-radius: 4px;
-  padding: 3px 5px;
+  padding: var(--sp-3) var(--sp-5);
   cursor: pointer;
   line-height: 0;
   flex-shrink: 0;
@@ -1533,7 +1668,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: var(--sp-12) var(--sp-16);
   border-bottom: 1px solid var(--surface-hover);
 }
 
@@ -1546,8 +1681,8 @@
 
 .settings-modal__tabs {
   display: flex;
-  gap: 4px;
-  padding: 8px 12px 0;
+  gap: var(--sp-4);
+  padding: var(--sp-8) var(--sp-12) 0;
   border-bottom: 1px solid var(--surface-hover);
 }
 
@@ -1555,7 +1690,7 @@
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
-  padding: 8px 12px;
+  padding: var(--sp-8) var(--sp-12);
   color: var(--text-subtle);
   cursor: pointer;
   font-size: calc(13px * var(--font-scale, 1));
@@ -1570,11 +1705,11 @@
 }
 
 .settings-modal__body {
-  padding: 14px 16px;
+  padding: var(--sp-14) var(--sp-16);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--sp-10);
 }
 
 /* Help text + token legend under the wormhole-bookmark format field. */
@@ -1591,7 +1726,7 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--sp-3);
   font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-subtle);
 }
@@ -1601,7 +1736,7 @@
   background: var(--surface-panel);
   border: 1px solid var(--border);
   border-radius: 3px;
-  padding: 0 4px;
+  padding: 0 var(--sp-4);
   font-size: calc(11px * var(--font-scale, 1));
 }
 
@@ -1615,7 +1750,7 @@
 .notif-grid {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-2);
   margin-top: 6px;
 }
 
@@ -1627,7 +1762,7 @@
 }
 
 .notif-grid__head {
-  padding-bottom: 3px;
+  padding-bottom: var(--sp-3);
   border-bottom: 1px solid var(--border);
   margin-bottom: 2px;
 }
@@ -1639,7 +1774,7 @@
 }
 
 .notif-grid__row {
-  padding: 3px 0;
+  padding: var(--sp-3) 0;
 }
 
 .notif-grid__row .map-sidebar__toggle-input {
@@ -1659,7 +1794,7 @@
 
 .map-sidebar__action {
   width: 100%;
-  padding: 8px 10px;
+  padding: var(--sp-8) var(--sp-10);
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -1670,7 +1805,7 @@
   transition: background 0.15s, color 0.15s;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-4);
 
   &:hover {
     background: var(--surface-overlay);
@@ -1681,14 +1816,14 @@
 .map-sidebar__btn-group {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-4);
 }
 
 /* Copy Map "new map type" picker — buttons side by side, equal width. */
 .copymap__type-group { display: flex; gap: 6px; }
 .copymap__type-btn {
   flex: 1;
-  padding: 6px 10px;
+  padding: var(--sp-6) var(--sp-10);
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -1703,7 +1838,7 @@
 
 .map-sidebar__btn-group-item {
   width: 100%;
-  padding: 6px 10px;
+  padding: var(--sp-6) var(--sp-10);
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -1748,7 +1883,7 @@
     border-radius: 5px;
     color: var(--text-secondary);
     font-size: calc(16px * var(--font-scale, 1));
-    padding: 4px 10px;
+    padding: var(--sp-4) var(--sp-10);
     white-space: nowrap;
     pointer-events: none;
     opacity: 0;
@@ -1762,14 +1897,14 @@
 .content-filter {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-6);
   margin-top: 2px;
 }
 
 .content-filter__chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--sp-4);
   margin-bottom: 2px;
 }
 
@@ -1778,7 +1913,7 @@
   background: var(--surface-base);
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 5px 8px;
+  padding: var(--sp-5) var(--sp-8);
   margin-top: 4px;
   font-size: calc(12px * var(--font-scale, 1));
   color: var(--text-primary);
@@ -1791,7 +1926,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--sp-8);
   margin-top: 4px;
 }
 
@@ -1803,12 +1938,12 @@
 .content-filter__clear {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-4);
   background: transparent;
   border: 1px solid #3a2030;
   color: var(--danger);
   border-radius: 4px;
-  padding: 3px 8px;
+  padding: var(--sp-3) var(--sp-8);
   font-size: calc(12px * var(--font-scale, 1));
   cursor: pointer;
 }
@@ -1822,7 +1957,7 @@
   color: var(--text-subtle);
   font-family: inherit;
   font-size: calc(13px * var(--font-scale, 1));
-  padding: 2px 11px;
+  padding: var(--sp-2) 11px;
   cursor: pointer;
   transition: border-color 0.12s, color 0.12s, background 0.12s;
 }
@@ -1838,7 +1973,7 @@
   color: #6a8ab0;
   font-family: inherit;
   font-size: calc(12px * var(--font-scale, 1));
-  padding: 2px 6px;
+  padding: var(--sp-2) var(--sp-6);
   cursor: pointer;
   text-decoration: underline;
 }
@@ -1859,20 +1994,20 @@
   border: 1px solid var(--border);
   border-radius: 6px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.6);
-  padding: 6px;
+  padding: var(--sp-6);
 }
 .sig-col-menu__title {
   font-size: calc(11px * var(--font-scale, 1));
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: #6a8ab0;
-  padding: 2px 6px 6px;
+  padding: var(--sp-2) var(--sp-6) var(--sp-6);
 }
 .sig-col-menu__item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 6px;
+  gap: var(--sp-8);
+  padding: var(--sp-4) var(--sp-6);
   border-radius: 4px;
   font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-default);
@@ -1885,7 +2020,7 @@
   font-size: calc(16px * var(--font-scale, 1));
   color: var(--text-faint);
   font-style: italic;
-  padding: 4px 0;
+  padding: var(--sp-4) 0;
 }
 
 /* Share-mode variant: there's no toolbar or hint above this message, so
@@ -1908,13 +2043,13 @@
     text-transform: uppercase;
     letter-spacing: 0.06em;
     text-align: left;
-    padding: 5px 6px;
+    padding: var(--sp-5) var(--sp-6);
     border-bottom: 1px solid var(--surface-hover);
     white-space: nowrap;
   }
 
   td {
-    padding: 2px 4px;
+    padding: var(--sp-2) var(--sp-4);
     border-bottom: 1px solid var(--surface-panel);
     vertical-align: middle;
     height: 34px;
@@ -1927,6 +2062,7 @@
   }
 }
 
+.sig-col--scout   { width: 26px; }
 .sig-col--check   { width: 24px; }
 .sig-col--whtype  { overflow: visible; }
 .sig-col--bookmark { width: 28px; }
@@ -2056,7 +2192,7 @@
   margin-bottom: 6px;
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: var(--sp-10);
 }
 .known-structures__hint     { font-size: calc(11px * var(--font-scale, 1)); text-transform: none; letter-spacing: 0; color: #4a5670; }
 .known-structures__table    { width: 100%; }
@@ -2067,7 +2203,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding: 1px 6px;
+  padding: var(--sp-1) var(--sp-6);
   border-radius: 3px;
 }
 .known-structures__badge--corp-esi       { background: rgba(91,155,255,0.15);  color: var(--accent-pale); border: 1px solid rgba(91,155,255,0.4); }
@@ -2130,7 +2266,7 @@
   color: #a0b0c8;
   font-size: calc(13px * var(--font-scale, 1));
   font-family: inherit;
-  padding: 2px 2px;
+  padding: var(--sp-2) var(--sp-2);
   width: 100%;
   cursor: pointer;
   outline: none;
@@ -2167,7 +2303,7 @@
   border-radius: 4px;
   color: var(--text-secondary);
   font-size: calc(14px * var(--font-scale, 1));
-  padding: 3px 10px;
+  padding: var(--sp-3) var(--sp-10);
   cursor: pointer;
   font-family: inherit;
 
@@ -2186,10 +2322,10 @@
 .sig-overwrite-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
   border: 1px solid var(--border-accent);
   border-radius: 4px;
-  padding: 2px 10px;
+  padding: var(--sp-2) var(--sp-10);
   color: var(--text-secondary);
   font-size: calc(14px * var(--font-scale, 1));
   cursor: pointer;
@@ -2223,14 +2359,14 @@ select.sig-toolbar-btn option {
 .lang-switcher__trigger {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
   background: var(--surface-base);
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-default);
   font-family: inherit;
   font-size: calc(13px * var(--font-scale, 1));
-  padding: 4px 8px;
+  padding: var(--sp-4) var(--sp-8);
   cursor: pointer;
   transition: border-color 0.15s ease;
 }
@@ -2261,17 +2397,17 @@ select.sig-toolbar-btn option {
   border: 1px solid var(--border);
   border-radius: 6px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.6);
-  padding: 4px;
+  padding: var(--sp-4);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-2);
 }
 .lang-switcher__option {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
   width: 100%;
-  padding: 6px 8px;
+  padding: var(--sp-6) var(--sp-8);
   background: transparent;
   border: none;
   border-radius: 4px;
@@ -2287,7 +2423,7 @@ select.sig-toolbar-btn option {
 
 .sig-notes-cell {
   vertical-align: top;
-  padding: 2px 4px;
+  padding: var(--sp-2) var(--sp-4);
 }
 
 .sig-td--wh {
@@ -2312,7 +2448,7 @@ select.sig-toolbar-btn option {
   font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-muted);
   white-space: nowrap;
-  padding-right: 8px;
+  padding-right: var(--sp-8);
 }
 
 .sig-td--updated {
@@ -2338,9 +2474,9 @@ select.sig-toolbar-btn option {
   font-family: 'Courier New', monospace;
   font-size: calc(13px * var(--font-scale, 1));
   font-weight: 600;
-  padding: 2px 5px;
+  padding: var(--sp-2) var(--sp-5);
   cursor: pointer;
-  gap: 4px;
+  gap: var(--sp-4);
   white-space: nowrap;
   
 }
@@ -2351,7 +2487,7 @@ select.sig-toolbar-btn option {
 .wh-picker__btn-inner {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--sp-5);
   overflow: hidden;
   
 }
@@ -2384,7 +2520,7 @@ select.sig-toolbar-btn option {
   font-family: inherit;
   font-size: calc(15px * var(--font-scale, 1));
   outline: none;
-  padding: 8px 12px;
+  padding: var(--sp-8) var(--sp-12);
 }
 .wh-picker__search::placeholder { color: var(--text-muted); }
 
@@ -2400,7 +2536,7 @@ select.sig-toolbar-btn option {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 7px 12px 3px;
+  padding: var(--sp-7) var(--sp-12) var(--sp-3);
   color: #grey;
   font-size: calc(13px * var(--font-scale, 1));
   font-weight: 700;
@@ -2416,8 +2552,8 @@ select.sig-toolbar-btn option {
 .wh-picker__option {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
+  gap: var(--sp-8);
+  padding: var(--sp-6) var(--sp-12);
   cursor: pointer;
   white-space: nowrap;
   color: var(--text-secondary);
@@ -2437,13 +2573,13 @@ select.sig-toolbar-btn option {
    edge so the map and the table read the same. */
 .sig-whstate {
   display: inline-flex;
-  gap: 3px;
+  gap: var(--sp-3);
 }
 
 .sig-whstate__chip {
   /* Fits "<50%" — the widest label either chip carries. */
   min-width: 40px;
-  padding: 0 4px;
+  padding: 0 var(--sp-4);
   border: 1px solid var(--border);
   border-radius: 3px;
   background: none;
@@ -2495,14 +2631,14 @@ select.sig-toolbar-btn option {
 .panel-visibility__list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--sp-2);
 }
 
 .panel-visibility__item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 6px;
+  gap: var(--sp-8);
+  padding: var(--sp-5) var(--sp-6);
   border-radius: 4px;
   cursor: pointer;
   font-size: calc(13px * var(--font-scale, 1));
@@ -2516,8 +2652,8 @@ select.sig-toolbar-btn option {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 24px 16px;
+  gap: var(--sp-10);
+  padding: 24px var(--sp-16);
   text-align: center;
   color: var(--text-dim);
   font-size: calc(12px * var(--font-scale, 1));
@@ -2530,4 +2666,12 @@ select.sig-toolbar-btn option {
   margin: 10px 0 0;
   color: var(--cv-conn-1h);
   font-size: calc(12px * var(--font-scale, 1));
+}
+
+/* Digit-sized options (the 1/2/3 column picker) belong on one line: the shared
+   group stacks vertically, which is right for word-length choices but turns
+   three single characters into three rows of a sidebar that is already short of
+   height. */
+.map-sidebar__btn-group--inline {
+  flex-direction: row;
 }

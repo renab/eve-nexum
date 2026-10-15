@@ -19,6 +19,7 @@ import {
   useMinimapPosition,
   type MinimapPosition,
 } from "../../hooks/useMinimapPosition";
+import type { Density } from '../../utils/density';
 import { useUserSetting } from "../../hooks/useUserSetting";
 import { normalizePlacement } from "../../hooks/useLocationTracking";
 import { NOTIFY, notifyDefault, previewAlertVolume, ALERT_VOLUME_KEY, ALERT_VOLUME_DEFAULT, EXITS_MIN_SECURITY_KEY, EXITS_MIN_SECURITY_DEFAULT, EXITS_MIN_SECURITY_OFF } from "../../utils/notificationPrefs";
@@ -27,12 +28,12 @@ import { DEFAULT_BOOKMARK_FORMAT, BOOKMARK_TOKENS, DEFAULT_SITE_BOOKMARK_FORMAT,
 import { toPng } from "html-to-image";
 import { CaretLeftIcon, CaretRightIcon, DiscordLogoIcon } from "@phosphor-icons/react";
 import { DISCORD_INVITE_URL } from "../../data/links";
-import { ChainExitsSection } from "./ChainExitsSection";
 import { JumpRangePane } from "./JumpRangePane";
 import { AnnouncerSection } from "./AnnouncerSection";
 import { MapSharesSection } from "./MapSharesSection";
 import { MergeMapModal } from "./MergeMapModal";
 import { CustomIntelBlock } from "./CustomIntelBlock";
+import { FlagPresetsBlock } from "./FlagPresetsBlock";
 import { PatchNotesModal } from "./PatchNotesModal";
 import { ContentFilterBlock } from "./ContentFilterBlock";
 import { useIsMapOwner } from "../../hooks/useIsMapOwner";
@@ -148,7 +149,6 @@ type SectionId =
   | "connections"
   | "tracking"
   | "route"
-  | "chainExits"
   | "jumpRange"
   | "proximityAlerts"
   | "notifications"
@@ -842,6 +842,9 @@ export function MapSidebar() {
     "nexum.mapSidebar.openSection",
     "mapControls",
   );
+  // Parallel columns in the system panel's pane stack. Read here and in
+  // SystemPanel from the same key.
+  const [panelColumns, setPanelColumns] = useUserSetting<number>('nexum.systemPanel.columns', 1);
   const sectionProps = (id: SectionId) => ({
     isOpen: openSection === id,
     onToggle: () => setOpenSection((cur) => (cur === id ? null : id)),
@@ -946,6 +949,7 @@ export function MapSidebar() {
   const routeMode = useMapStore((s) => s.routeMode);
   const setRouteMode = useMapStore((s) => s.setRouteMode);
   const uiZoom = useMapStore((s) => s.uiZoom);
+  const [density, setDensity] = useUserSetting<Density>('nexum.ui.density', 'comfortable');
   const setUiZoom = useMapStore((s) => s.setUiZoom);
   const optimizeConnections = useMapStore((s) => s.optimizeConnections);
   const requestAutoLayout = useMapStore((s) => s.requestAutoLayout);
@@ -1295,10 +1299,36 @@ export function MapSidebar() {
               className={`toolbar__toggle${panelSideBySide ? " toolbar__toggle--on" : ""}`}
               onClick={() => setPanelSideBySide(!panelSideBySide)}
               aria-pressed={panelSideBySide}
+              data-tooltip={t("mapSidebar.panelLayoutTooltip")}
             >
               {panelSideBySide ? t("mapSidebar.panelBeside") : t("mapSidebar.panelBelow")}
             </button>
           </div>
+
+          {/* Split the pane stack into parallel columns, so notes or killboard
+              can sit BESIDE signatures rather than below them. Only offered in
+              the below-the-map layout: the beside layout is a narrow strip and
+              splitting it would leave both halves unreadable. */}
+          {!panelSideBySide && (
+            <div className="map-sidebar__row">
+              <label className="map-sidebar__label">{t("mapSidebar.panelColumns")}</label>
+              <div
+                className="map-sidebar__btn-group map-sidebar__btn-group--inline"
+                data-tooltip={t("mapSidebar.panelColumnsTooltip")}
+              >
+                {[1, 2, 3].map((n) => (
+                  <button
+                    key={n}
+                    className={`toolbar__toggle${panelColumns === n ? " toolbar__toggle--on" : ""}`}
+                    onClick={() => setPanelColumns(n)}
+                    aria-pressed={panelColumns === n}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="map-sidebar__row">
             <label className="map-sidebar__label">{t("mapSidebar.compact")}</label>
@@ -1456,6 +1486,8 @@ export function MapSidebar() {
               <LazyWhSweepToggle />
             </>
           )}
+
+          <FlagPresetsBlock />
         </CollapsibleSection>
 
         {/* Shared bookmark formats (wormhole + relic/data/gas) for this map.
@@ -1534,12 +1566,6 @@ export function MapSidebar() {
           </p>
         </CollapsibleSection>
 
-        <CollapsibleSection
-          title={t("mapSidebar.sections.chainExits")}
-          {...sectionProps("chainExits")}
-        >
-          <ChainExitsSection />
-        </CollapsibleSection>
 
         <CollapsibleSection title={t("mapSidebar.sections.jumpRange")} {...sectionProps("jumpRange")}>
           <JumpRangePane />
@@ -1682,6 +1708,14 @@ export function MapSidebar() {
         <CollapsibleSection title={t("mapSidebar.sections.activity")} {...sectionProps("activity")}>
           <div className="map-sidebar__hint">
             {t("mapSidebar.activityHint")}
+          </div>
+          <SettingToggle
+            settingKey="nexum.activity.combined"
+            label={t("mapSidebar.activityCombined")}
+            defaultOn={false}
+          />
+          <div className="map-sidebar__hint">
+            {t("mapSidebar.activityCombinedHint")}
           </div>
           <SettingToggle settingKey="nexum.activity.showJumps" label={t("mapSidebar.activityJumps")} />
           <SettingToggle
@@ -1925,6 +1959,17 @@ export function MapSidebar() {
                         {Math.round(uiZoom * 100)}%
                       </button>
                     </div>
+                  </div>
+                  <div className="map-sidebar__row">
+                    <label className="map-sidebar__label" htmlFor="ui-density">{t("mapSidebar.density")}</label>
+                    <Select id="ui-density" value={density} onChange={(v) => setDensity(v as Density)} options={[
+                      { value: "comfortable", label: t("mapSidebar.densityOptions.comfortable") },
+                      { value: "compact",     label: t("mapSidebar.densityOptions.compact") },
+                      { value: "dense",       label: t("mapSidebar.densityOptions.dense") },
+                    ]} />
+                  </div>
+                  <div className="map-sidebar__hint">
+                    {t("mapSidebar.densityHint")}
                   </div>
                   <div className="map-sidebar__row">
                     <label className="map-sidebar__label" htmlFor="placement-dir">{t("mapSidebar.placement")}</label>

@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { charPortrait } from '../../utils/eveImages';
+import { siteSafety } from '../../utils/siteSafety';
+import { sigSortKey } from '../../utils/sigSort';
 import { api } from '../../api/client';
 import i18n from '../../i18n';
 import { useMapStore, awaitSystemCreate } from '../../store/mapStore';
@@ -311,23 +314,6 @@ const SIG_TYPE_FILTER_ORDER: SigType[] = ['wormhole', 'data', 'relic', 'gas', 'o
 // both the per-row type picker and the bulk "set type" dropdown.
 const SIG_TYPE_OPTIONS: SigType[] = ['wormhole', 'combat', 'data', 'gas', 'ghost', 'ore', 'relic', 'unknown'];
 
-// Relic/data site safety, keyed on the first word of the scanned site name (per
-// the site-safety table). "Safe" sites have no NPCs; "not safe" ones can spawn
-// combat. Only relic + data sigs qualify; anything else has no safety verdict.
-const SAFE_SITE_PREFIXES   = new Set(['crumbling', 'decayed', 'ruined', 'local', 'regional', 'central']);
-const UNSAFE_SITE_PREFIXES = new Set(['forgotten', 'unsecured', 'aegis', 'scc']);
-function siteSafety(sig: Signature): 'safe' | 'unsafe' | null {
-  if (sig.sigType !== 'relic' && sig.sigType !== 'data') return null;
-  const words = (sig.name ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean);
-  // Names can be prefixed with "Detected " (e.g. "Detected Central Sansha…"),
-  // so the safety keyword is the first non-"detected" word.
-  const key = words[0] === 'detected' ? words[1] : words[0];
-  if (!key) return null;
-  if (SAFE_SITE_PREFIXES.has(key))   return 'safe';
-  if (UNSAFE_SITE_PREFIXES.has(key)) return 'unsafe';
-  return null;
-}
-
 // The "Safe" cell: green tick / red cross for relic-and-data site safety, blank
 // otherwise.
 function SafeCell({ sig }: { sig: Signature }) {
@@ -357,7 +343,40 @@ function startTickIfNeeded() {
   }, 1000);
 }
 
-function ElapsedCell({ iso, className }: { iso: string | undefined; className?: string }) {
+/**
+ * Who scanned the row, as the leading column.
+ *
+ * It sat beside the age before, which put it behind a horizontal scroll on any
+ * panel narrow enough to need one -- the attribution was there but unreachable
+ * without dragging the table sideways. First column costs no width worth
+ * speaking of and is visible whatever the panel is doing.
+ *
+ * Nothing is rendered when the row predates attribution or the scout's account
+ * is gone: a placeholder face would imply we know and don't.
+ */
+function ScoutCell({ byCharId, byName }: {
+  byCharId?: number | string | null;
+  byName?: string | null;
+}) {
+  return (
+    <td className="sig-td--scout">
+      {byCharId != null && (
+        <img
+          className="sig-td__scout"
+          src={charPortrait(byCharId, 32)}
+          alt=""
+          loading="lazy"
+          data-tooltip={byName ?? String(byCharId)}
+        />
+      )}
+    </td>
+  );
+}
+
+function ElapsedCell({ iso, className }: {
+  iso: string | undefined;
+  className?: string;
+}) {
   const { t } = useTranslation();
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -375,7 +394,11 @@ function ElapsedCell({ iso, className }: { iso: string | undefined; className?: 
   const text = iso
     ? duration(t, Math.floor((tickNow - new Date(iso).getTime()) / 1000))
     : DASH;
-  return <td className={className}>{text}</td>;
+  return (
+    <td className={className}>
+      <span>{text}</span>
+    </td>
+  );
 }
 
 export function SignaturePane({ systemId }: { systemId: string }) {
@@ -1032,17 +1055,9 @@ export function SignaturePane({ systemId }: { systemId: string }) {
   const sortedSigs = useMemo(() => {
     const base = typeFilter.size ? sigs.filter((s) => typeFilter.has(s.sigType)) : sigs;
     if (!sortCol) return base;
-    // The type column shows a different field per group, so sort it on what's
-    // actually on screen rather than on whType alone — otherwise ghost rows all
-    // sort as blank.
-    const key = (s: Signature) => (
-      sortCol === 'whType' && s.sigType === 'ghost'
-        ? (ghostTier(s.sigType, s.name, s.ghostType)?.tier ?? '')
-        : (s[sortCol] ?? '')
-    );
     return [...base].sort((a, b) => {
-      const av = key(a).toLowerCase();
-      const bv = key(b).toLowerCase();
+      const av = sigSortKey(a, sortCol).toLowerCase();
+      const bv = sigSortKey(b, sortCol).toLowerCase();
       const cmp = av.localeCompare(bv);
       return sortDir === 'asc' ? cmp : -cmp;
     });
@@ -1165,6 +1180,18 @@ export function SignaturePane({ systemId }: { systemId: string }) {
               {t('signatures.filterClear')}
             </button>
           )}
+          {/* Deliberately "shown of total" while a filter is on: a bare number
+              next to active filter chips reads as the system's signature count
+              and would understate it. No plural form, so it behaves the same in
+              languages that have none. */}
+          <span
+            className="sig-pane__count"
+            title={typeFilter.size > 0 ? t('signatures.countFilteredHint') : t('signatures.countHint')}
+          >
+            {typeFilter.size > 0
+              ? t('signatures.countFiltered', { shown: sortedSigs.length, total: sigs.length })
+              : t('signatures.countTotal', { count: sigs.length })}
+          </span>
           <div className="sig-col-menu">
             <button
               ref={colBtnRef}
@@ -1224,6 +1251,7 @@ export function SignaturePane({ systemId }: { systemId: string }) {
                 gone, so their <col> entries must drop too — otherwise
                 table-layout:fixed maps them onto the wrong cells and
                 the ID column inherits the 24px checkbox width. */}
+            <col className="sig-col--scout" />
             {!isShareMode && <col className="sig-col--check" />}
             <col style={{ width: colWidths.id }} />
             <col style={{ width: colWidths.type }} />
@@ -1240,6 +1268,7 @@ export function SignaturePane({ systemId }: { systemId: string }) {
           </colgroup>
           <thead>
             <tr>
+              <th className="sig-th sig-th--scout" />
               {!isShareMode && (
                 <th>
                   <input
@@ -1315,6 +1344,7 @@ export function SignaturePane({ systemId }: { systemId: string }) {
                 className={`${selected.has(sig.id) ? 'sig-row--selected' : ''} ${sig.sigType === 'unknown' ? 'sig-row--unknown' : ''} ${whAgeRowClass(sig.sigType, sig.whType, sig.createdAt, tickNow, whTypes)} ${removing.has(sig.id) ? 'sig-row--removing' : ''}`}
                 style={removing.has(sig.id) && overwriteDelay > 0 ? { animationDuration: `${overwriteDelay}s` } : undefined}
               >
+                <ScoutCell byCharId={sig.createdByCharId} byName={sig.createdByName} />
                 {!isShareMode && (
                   <td>
                     <input

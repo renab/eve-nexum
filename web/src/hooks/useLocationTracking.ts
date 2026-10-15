@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useMapStore, getPlacementCell, registerPlacementFix } from '../store/mapStore';
 import { useCharacterLocation, useCharacterLocationCheckedAt } from './useCharacterLocation';
-import { useClones, cloneSystemIds } from './useClones';
 import { useCanEdit } from './useCanEdit';
 import { useAuth } from '../context/AuthContext';
 import { readUserSetting } from './useUserSetting';
@@ -16,6 +15,56 @@ interface Box { position: { x: number; y: number } }
 // AABB overlap test between two top-left-anchored w×h boxes, padded by `gap`.
 function boxesOverlap(ax: number, ay: number, bx: number, by: number, w: number, h: number, gap: number): boolean {
   return ax < bx + w + gap && ax + w + gap > bx && ay < by + h + gap && ay + h + gap > by;
+}
+
+// The two real capsule hulls — the Genolution variant is the same pod with a
+// different type id. (The server's kill feed classifies pod kills off the same
+// pair; the SDE's other "Capsule ..." rows are SKINs, not hulls.)
+const CAPSULE_TYPE_IDS = new Set([670, 33328]);
+
+/**
+ * Did the pilot wake up in a pod rather than fly here?
+ *
+ * Getting podded always ends the same way: a BRAND NEW capsule at your medical
+ * clone, which is routinely a trade hub on the far side of the cluster. Both
+ * halves are needed — a new hull alone is a ship swap, and being in a pod alone
+ * is just someone flying a pod, which is a perfectly normal thing to do through
+ * a wormhole.
+ *
+ * Exported for the tests: the rule is small but the cost of getting it wrong is
+ * a map that lies about its topology.
+ */
+export function arrivedInPod(hullChanged: boolean, shipTypeId: number | null | undefined): boolean {
+  return hullChanged && shipTypeId != null && CAPSULE_TYPE_IDS.has(shipTypeId);
+}
+
+/**
+ * True when a system change was a CLONE JUMP rather than a hop someone flew.
+ *
+ * A clone jump needs a capsule and a station or structure at both ends: you
+ * jump from docked to docked. A wormhole cannot be flown docked — you have to
+ * undock, warp to the hole and jump it — so a system change seen docked at
+ * both ends was not flown, whatever else it was.
+ *
+ * This replaces a check that could never fire. The old one was
+ * `hullChanged && destination is one of my clone systems`, and a clone jump is
+ * capsule to capsule, so the hull does not change and the whole expression was
+ * always false. Granting the ESI clones scope would not have helped: the dead
+ * half was the hull, not the clone list. The pod-death rule above is in the
+ * same position for clone jumps — it also requires a hull change — which is
+ * why it only ever caught deaths, where you were flying a ship beforehand.
+ *
+ * Needs no scope at all: station_id / structure_id come back from the location
+ * endpoint we already read.
+ *
+ * The cost is a real connection lost if someone undocks, crosses to a hole,
+ * jumps it and docks on the far side inside one 10s poll, which is not a
+ * manoeuvre that fits in ten seconds. The trade is the one this file makes
+ * throughout: a missing connection a scout re-adds beats a false one that
+ * makes the map lie about topology.
+ */
+export function cloneJumpedBetween(dockedBefore: boolean, dockedNow: boolean): boolean {
+  return dockedBefore && dockedNow;
 }
 
 // Snap-grid size — must match MapCanvas's snapGrid ([20,20]) and mapStore's GRID.
@@ -345,7 +394,6 @@ export function useLocationTracking(enabled: boolean) {
   // When the location was last READ successfully, not when it last changed. The
   // gap between consecutive reads is what says whether a jump can be trusted.
   const checkedAt = useCharacterLocationCheckedAt();
-  const clones = useClones();
   const { user } = useAuth();
   // The effective acting character (pin, else this tab's own character). Any
   // change to it must reset the jump refs below, so the new character's system
@@ -377,6 +425,9 @@ export function useLocationTracking(enabled: boolean) {
   const lastShipItemId = useRef<number | null>(null);
   // The previous successful location read, for measuring the gap to this one.
   const lastCheckedAt = useRef<number | null>(null);
+  // Whether the pilot was docked when we last saw them. Half of the clone-jump
+  // test — you jump from docked to docked, and neither end can be in space.
+  const lastDocked = useRef<boolean>(false);
 
   useEffect(() => {
     if (!enabled) return;
@@ -398,6 +449,7 @@ export function useLocationTracking(enabled: boolean) {
       prevPhysical.current = null;
       lastShipItemId.current = null;
       lastCheckedAt.current = null;
+      lastDocked.current = false;
     }
 
     const system = location.system;
@@ -407,37 +459,46 @@ export function useLocationTracking(enabled: boolean) {
       prevPhysical.current = null;
       lastShipItemId.current = null;
       lastCheckedAt.current = null;
+      lastDocked.current = false;
       setCurrentSystem(null);
       return;
     }
 
-    // Did they fly here, or wake up here? A clone jump has to satisfy BOTH of
-    // these, because either one alone gets it wrong:
+    // Did they fly here, or wake up here?
     //
-    //   hull changed  — fly a hole or a gate and it's the same hull the whole
-    //     way; die or activate a jump clone and you wake in a different one.
-    //     Alone it's wrong when you're podded AT a hole and jump through it in
-    //     the pod, which would suppress a wormhole that really exists.
-    //   arrived at one of this pilot's clones — medical or jump. Alone it's
-    //     wrong when you legitimately fly to a system you keep a clone in, which
-    //     for staging systems is most of the time.
-    //
-    // Only a clone jump makes both true: dying at a hole doesn't put you at your
-    // medical clone, and flying to your staging doesn't change your hull.
-    //
-    // Computed and recorded BEFORE the unchanged-system return below: swapping
-    // ship while sitting still has to update the remembered hull too, or the
-    // next genuine jump would compare against a stale one and lose its
-    // connection.
+    // Both tests below are computed and recorded BEFORE the unchanged-system
+    // return further down. Swapping ship or docking while sitting still has to
+    // update what we remember, or the next genuine jump would compare against a
+    // stale reading and lose its connection.
     const shipItemIdNow = location.ship?.itemId ?? null;
     const hullChanged =
       lastShipItemId.current != null && shipItemIdNow != null
       && lastShipItemId.current !== shipItemIdNow;
     if (shipItemIdNow != null) lastShipItemId.current = shipItemIdNow;
-    // No clone data (scope not yet granted, ESI down) means no suppression at
-    // all — the old behaviour. A missing connection nobody notices is worse than
-    // a wrong one somebody deletes.
-    const cloneJumped = hullChanged && cloneSystemIds(clones).has(system.eveSystemId);
+    const dockedBefore = lastDocked.current;
+    lastDocked.current = location.docked;
+    // Docked at both ends — see cloneJumpedBetween. Read before the ref is
+    // updated below, so it compares the PREVIOUS reading with this one.
+    const cloneJumped = cloneJumpedBetween(dockedBefore, location.docked);
+
+    // Woke up in a pod somewhere else. Getting podded always ends the same way:
+    // a BRAND NEW capsule at your medical clone, which is routinely a trade hub
+    // on the far side of the cluster. Connecting that to the hole you died at
+    // asserts a wormhole straight into Jita.
+    //
+    // Distinct from the clone-jump test above, and neither subsumes the other:
+    // a death happens in space, so it is not docked at both ends, and a clone
+    // jump is capsule to capsule, so it changes no hull.
+    //
+    // It does not re-break the case the hull check was careful about — being
+    // podded AT a hole and then jumping through it in the pod. The hull change
+    // is consumed by the poll that sees the death (same system, and
+    // lastShipItemId is updated before the unchanged-system return above), so
+    // the later jump compares pod against the same pod and draws its connection
+    // normally. Only a death and a hole jump inside one poll interval would lose
+    // it, and a missing connection a scout re-adds beats a false one that makes
+    // the map lie about topology.
+    const wokeInPod = arrivedInPod(hullChanged, location.ship?.typeId);
 
     // How long since the last SUCCESSFUL read. A pilot who has been unobserved
     // for minutes may have crossed several systems, so the change we are looking
@@ -451,7 +512,7 @@ export function useLocationTracking(enabled: boolean) {
       && checkedAt - prevCheckedAt > MAX_TRACKING_GAP_MS;
 
     // Same treatment as a clone jump: record the system, draw no connection.
-    const teleported = cloneJumped || unobserved;
+    const teleported = cloneJumped || wokeInPod || unobserved;
 
     if (system.eveSystemId === lastEveSystemId.current) return;
 
@@ -532,5 +593,5 @@ export function useLocationTracking(enabled: boolean) {
       lastSelectedEveId.current = system.eveSystemId;
       selectSystem(mapSystemId, { fromJump: true });
     }
-  }, [enabled, location, checkedAt, canEdit, followedId, clones]);
+  }, [enabled, location, checkedAt, canEdit, followedId]);
 }

@@ -5,13 +5,50 @@
 .panel-stack {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-6);
   flex: 1;
   min-width: 260px;
   overflow-y: auto;
-  padding-top: 12px;
+  padding-top: var(--sp-12);
   min-height: 0;
 }
+
+/* Parallel columns inside the stack. The stack itself stays the single
+   scroller — per-column scrollers would re-create the nested-scroller trap
+   documented in panels.css, where two of them meant the wheel did nothing at
+   all while the cursor sat over the wrong block. The cost is honest: the
+   columns scroll together, and a short one leaves space below it. */
+.panel-stack__cols { display: flex; flex-direction: column; gap: 6px; }
+
+.panel-stack__cols--multi {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: var(--sp-10);
+}
+
+/* flex-basis 0 with no min-width: the columns share whatever width there is
+   rather than forcing the panel to scroll sideways. Picking three on a narrow
+   window makes them cramped, which is visible and reversible — a hard floor
+   would instead overflow the panel, which is neither. */
+.panel-stack__cols--multi > .panel-stack__col {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.panel-stack__col { display: flex; flex-direction: column; gap: 6px; }
+
+.info-card__col-btn {
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0 var(--sp-1);
+  line-height: 1;
+}
+.info-card__col-btn:hover:not(:disabled) { color: var(--accent-light); }
+.info-card__col-btn:disabled { opacity: 0.25; cursor: default; }
 
 .info-card {
   background: var(--surface-base);
@@ -30,8 +67,8 @@
 .info-card__header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
+  gap: var(--sp-6);
+  padding: var(--sp-5) var(--sp-8);
   border-bottom: 1px solid var(--border);
   background: var(--surface-well);
   cursor: pointer;
@@ -77,7 +114,7 @@
   cursor: grab;
   font-size: calc(14px * var(--font-scale, 1));
   line-height: 1;
-  padding: 0 2px;
+  padding: 0 var(--sp-2);
   user-select: none;
 
   &:hover { color: var(--text-faint); }
@@ -85,7 +122,7 @@
 }
 
 .info-card__body {
-  padding: 8px 10px;
+  padding: var(--sp-8) var(--sp-10);
 }
 
 /* Undock button in a dock card header — subtle, brightens on hover. */
@@ -96,7 +133,7 @@
   border: none;
   color: var(--text-dim);
   cursor: pointer;
-  padding: 0 2px;
+  padding: 0 var(--sp-2);
   line-height: 1;
 }
 .info-card__undock-btn:hover { color: var(--accent-light); }
@@ -118,8 +155,8 @@
 .floating-panel__bar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+  gap: var(--sp-6);
+  padding: var(--sp-6) var(--sp-10);
   background: var(--surface-panel);
   border-bottom: 1px solid var(--border);
   cursor: move;
@@ -145,13 +182,23 @@
   border: none;
   color: var(--text-dim);
   cursor: pointer;
-  padding: 0 2px;
+  padding: 0 var(--sp-2);
 }
 .floating-panel__redock:hover { color: var(--accent-light); }
+.floating-panel__close {
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0 var(--sp-2);
+}
+.floating-panel__close:hover { color: var(--danger); }
 .floating-panel__body {
   flex: 1;
   overflow: auto;
-  padding: 8px 10px;
+  padding: var(--sp-8) var(--sp-10);
 }
 .floating-panel__resize {
   position: absolute;
@@ -240,12 +287,12 @@
 
 .notes-editor--empty {
   cursor: text;
-  padding: 3px 6px;
+  padding: var(--sp-3) var(--sp-6);
 }
 
 .notes-editor--preview {
   cursor: text;
-  padding: 3px 6px;
+  padding: var(--sp-3) var(--sp-6);
   font-size: calc(13px * var(--font-scale, 1));
   color: var(--text-secondary);
   white-space: nowrap;
@@ -263,3 +310,34 @@
   padding: 0;
 }
 
+
+/* Column divider. A thin hit target with a hairline drawn inside it: the grab
+   area needs to be wide enough to hit without hunting, while the line itself
+   stays quiet enough not to read as a border on the panes either side. */
+.panel-stack__divider {
+  flex: 0 0 var(--sp-8);
+  align-self: stretch;
+  min-height: var(--sp-16);
+  margin: 0 calc(var(--sp-4) * -1);
+  cursor: col-resize;
+  position: relative;
+  border-radius: 2px;
+}
+
+.panel-stack__divider::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--border);
+  transition: background 0.12s ease;
+}
+
+.panel-stack__divider:hover::before,
+.panel-stack__divider:active::before {
+  background: var(--accent-bright);
+  width: 2px;
+}
