@@ -92,6 +92,21 @@ describe('WormholeSystems topology request validation', () => {
     (input.connections[0] as any).ship_size = 'xlarge';
     expect(() => validateWormholesystemsTopology(input)).toThrow(/source connection identity/);
   });
+
+  it('accepts absent or null coordinate and ship-size pairs without accepting partial coordinates', () => {
+    const input = valid() as any;
+    delete input.systems[0].positionX;
+    delete input.systems[0].positionY;
+    input.systems[1].positionX = null;
+    input.systems[1].positionY = null;
+    delete input.connections[0].ship_size;
+    const normalized = validateWormholesystemsTopology(input);
+    expect(normalized.systems.map(({ positionX, positionY }) => [positionX, positionY])).toEqual([[null, null], [null, null]]);
+    expect(normalized.connections[0].size).toBeNull();
+
+    input.systems[0].positionX = 10;
+    expect(() => validateWormholesystemsTopology(input)).toThrow(/coordinate pair/);
+  });
 });
 
 const v2SourceIdentity = 'wormholesystems:["https://source.example","map-1"]';

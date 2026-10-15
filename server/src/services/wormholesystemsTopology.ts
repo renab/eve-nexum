@@ -7,7 +7,7 @@ import { sdeSystemFacts } from './sdeFacts.js';
 import { publishToMap } from './mapEvents.js';
 
 type SnapshotEvidence = { complete: true; fetchedAt: string };
-type SystemInput = { sourceSystemId: string; eveSystemId: number; positionX: number; positionY: number };
+type SystemInput = { sourceSystemId: string; eveSystemId: number; positionX: number | null; positionY: number | null };
 type SignatureType = 'data' | 'relic' | 'gas' | 'ore' | 'combat' | 'wormhole' | 'ghost' | 'unknown';
 type SignatureInput = {
   sourceSignatureId: string;
@@ -22,7 +22,7 @@ type ConnectionInput = {
   fromSourceSystemId: string;
   toSourceSystemId: string;
   connectionType: 'standard' | 'gate' | 'jumpgate' | 'cyno';
-  size: 'small' | 'medium' | 'large' | 'xl';
+  size: 'small' | 'medium' | 'large' | 'xl' | null;
   sourceSignatureId: string | null;
   targetSignatureId: string | null;
 };
@@ -81,11 +81,16 @@ export function validateWormholesystemsTopology(input: unknown): TopologyInput {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('Invalid source system');
     const system = item as Record<string, unknown>;
     if (Object.keys(system).some(key => !['sourceSystemId', 'eveSystemId', 'positionX', 'positionY'].includes(key))) throw new Error('Unrecognized source system field');
+    const positionAbsent = (system.positionX === undefined || system.positionX === null) &&
+      (system.positionY === undefined || system.positionY === null);
+    const positionPresent = finiteCoordinate(system.positionX) && finiteCoordinate(system.positionY);
     if (!safeId(system.sourceSystemId) || !Number.isSafeInteger(system.eveSystemId) || Number(system.eveSystemId) < 1 || Number(system.eveSystemId) > 2_147_483_647 ||
-      !finiteCoordinate(system.positionX) || !finiteCoordinate(system.positionY)) throw new Error('Invalid source system identity');
+      (!positionAbsent && !positionPresent)) throw new Error('Invalid source system identity or coordinate pair');
     if (systemIds.has(system.sourceSystemId) || eveIds.has(Number(system.eveSystemId))) throw new Error('Duplicate source system identity');
     systemIds.add(system.sourceSystemId); eveIds.add(Number(system.eveSystemId));
-    return { sourceSystemId: system.sourceSystemId, eveSystemId: Number(system.eveSystemId), positionX: Math.fround(system.positionX), positionY: Math.fround(system.positionY) };
+    return { sourceSystemId: system.sourceSystemId, eveSystemId: Number(system.eveSystemId),
+      positionX: positionPresent ? Math.fround(system.positionX as number) : null,
+      positionY: positionPresent ? Math.fround(system.positionY as number) : null };
   });
   const signatures: SignatureInput[] = [];
   const signatureIds = new Set<string>(), assignedCodesBySystem = new Set<string>();
@@ -119,7 +124,8 @@ export function validateWormholesystemsTopology(input: unknown): TopologyInput {
       throw new Error('Unrecognized source connection field');
     if (!safeId(connection.sourceConnectionId) || !safeId(connection.fromSourceSystemId) || !safeId(connection.toSourceSystemId) ||
       connection.fromSourceSystemId === connection.toSourceSystemId || !systemIds.has(connection.fromSourceSystemId) || !systemIds.has(connection.toSourceSystemId) ||
-      !['standard', 'gate', 'jumpgate', 'cyno'].includes(String(connection.connection_type)) || !['small', 'medium', 'large', 'xl'].includes(String(connection.ship_size)))
+      !['standard', 'gate', 'jumpgate', 'cyno'].includes(String(connection.connection_type)) ||
+      !(connection.ship_size === undefined || connection.ship_size === null || ['small', 'medium', 'large', 'xl'].includes(String(connection.ship_size))))
       throw new Error('Invalid source connection identity');
     if (connectionIds.has(connection.sourceConnectionId)) throw new Error('Duplicate source connection identity');
     connectionIds.add(connection.sourceConnectionId);
@@ -138,7 +144,7 @@ export function validateWormholesystemsTopology(input: unknown): TopologyInput {
     }
     return { sourceConnectionId: connection.sourceConnectionId, fromSourceSystemId: connection.fromSourceSystemId,
       toSourceSystemId: connection.toSourceSystemId, connectionType: connection.connection_type as ConnectionInput['connectionType'],
-      size: connection.ship_size as ConnectionInput['size'], sourceSignatureId: (connection.sourceSignatureId ?? null) as string | null,
+      size: (connection.ship_size ?? null) as ConnectionInput['size'], sourceSignatureId: (connection.sourceSignatureId ?? null) as string | null,
       targetSignatureId: (connection.targetSignatureId ?? null) as string | null };
   });
   if (schemaVersion === 2) {
@@ -280,6 +286,7 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
     createdSignatures: 0, preservedSignatures: 0, updatedSignatures: 0, deletedSignatures: 0,
     createdConnections: 0, preservedConnections: 0, updatedConnections: 0, deletedConnections: 0,
     conflicts: [] as Array<{ itemId: string; reason: string }>,
+    diagnostics: [] as Array<{ itemId: string; reason: string }>,
     mappings: { systems: [] as Array<{ sourceId: string; rowId: string; ownership: 'owned' | 'preserved' }>,
       signatures: [] as Array<{ sourceId: string; rowId: string; ownership: 'owned' | 'preserved' }>,
       connections: [] as Array<{ sourceId: string; rowId: string; ownership: 'owned' | 'preserved' }> },
@@ -339,6 +346,8 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
     const sourceToRow = new Map<string, string>();
     for (const system of input.systems) {
       const sdeRow = sdeById.get(system.eveSystemId)!;
+      const hasPosition = system.positionX !== null && system.positionY !== null;
+      if (!hasPosition) result.diagnostics.push({ itemId: system.sourceSystemId, reason: 'position_unavailable' });
       const owned = ownedSystemBySource.get(system.sourceSystemId);
       if (owned) {
         const current = await client.query<Record<string, unknown>>(
@@ -350,7 +359,10 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
         }
         const previous = owned.managed_json as any;
         const currentManaged = managedSystem(row);
-        if (!same(currentManaged, ownedManagedSystem(previous))) {
+        const expectedManaged = ownedManagedSystem(previous);
+        const comparableManaged = hasPosition ? currentManaged : { ...currentManaged,
+          positionX: expectedManaged.positionX, positionY: expectedManaged.positionY };
+        if (!same(comparableManaged, expectedManaged)) {
           result.conflicts.push({ itemId: system.sourceSystemId, reason: 'managed system was manually changed; preserved' });
           continue;
         }
@@ -363,12 +375,16 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
             continue;
           }
         }
-        const nextManaged = { sourceSystemId: system.sourceSystemId, eveSystemId: system.eveSystemId, positionX: system.positionX,
-          positionY: system.positionY, name: sdeRow.name, systemClass: sdeRow.systemClass };
-        if (Number(row.eve_system_id) !== system.eveSystemId || system.positionX !== Math.fround(Number(row.position_x)) ||
-          system.positionY !== Math.fround(Number(row.position_y)) || sdeRow.name !== row.name || sdeRow.systemClass !== row.system_class) {
+        const nextPositionX = hasPosition ? system.positionX! : expectedManaged.positionX;
+        const nextPositionY = hasPosition ? system.positionY! : expectedManaged.positionY;
+        const positionX = hasPosition ? system.positionX! : Math.fround(Number(row.position_x));
+        const positionY = hasPosition ? system.positionY! : Math.fround(Number(row.position_y));
+        const nextManaged = { sourceSystemId: system.sourceSystemId, eveSystemId: system.eveSystemId, positionX: nextPositionX,
+          positionY: nextPositionY, name: sdeRow.name, systemClass: sdeRow.systemClass };
+        if (Number(row.eve_system_id) !== system.eveSystemId || (hasPosition && (system.positionX !== Math.fround(Number(row.position_x)) ||
+          system.positionY !== Math.fround(Number(row.position_y)))) || sdeRow.name !== row.name || sdeRow.systemClass !== row.system_class) {
           await client.query(`UPDATE map_systems SET eve_system_id=$1, position_x=$2, position_y=$3, name=$4, system_class=$5 WHERE id=$6 AND map_id=$7`,
-            [system.eveSystemId, system.positionX, system.positionY, sdeRow.name, sdeRow.systemClass, owned.row_id, mapId]);
+            [system.eveSystemId, positionX, positionY, sdeRow.name, sdeRow.systemClass, owned.row_id, mapId]);
           result.updatedSystems++;
         }
         await client.query(`UPDATE wormholesystems_topology_ownership SET managed_json=$1 WHERE map_id=$2 AND source_identity=$3 AND item_kind='system' AND source_item_id=$4`,
@@ -392,13 +408,22 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
       const rowId = crypto.randomUUID();
       const facts = await sdeSystemFacts(system.eveSystemId);
       const insertedClass = sdeRow.systemClass;
-      const managed = { sourceSystemId: system.sourceSystemId, eveSystemId: system.eveSystemId, positionX: system.positionX,
-        positionY: system.positionY, name: sdeRow.name, systemClass: insertedClass };
-      await client.query(
-        `INSERT INTO map_systems (id,map_id,eve_system_id,name,system_class,effect,statics,position_x,position_y,status,is_home,locked,notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'unknown',FALSE,FALSE,'')`,
-        [rowId, mapId, system.eveSystemId, sdeRow.name, insertedClass,
-          facts?.effect ?? 'none', facts?.statics ?? [], system.positionX, system.positionY]);
+      const positionX = hasPosition ? system.positionX! : 0;
+      const positionY = hasPosition ? system.positionY! : 0;
+      const managed = { sourceSystemId: system.sourceSystemId, eveSystemId: system.eveSystemId, positionX,
+        positionY, name: sdeRow.name, systemClass: insertedClass };
+      if (hasPosition) {
+        await client.query(
+          `INSERT INTO map_systems (id,map_id,eve_system_id,name,system_class,effect,statics,position_x,position_y,status,is_home,locked,notes)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'unknown',FALSE,FALSE,'')`,
+          [rowId, mapId, system.eveSystemId, sdeRow.name, insertedClass,
+            facts?.effect ?? 'none', facts?.statics ?? [], positionX, positionY]);
+      } else {
+        await client.query(
+          `INSERT INTO map_systems (id,map_id,eve_system_id,name,system_class,effect,statics,status,is_home,locked,notes)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'unknown',FALSE,FALSE,'')`,
+          [rowId, mapId, system.eveSystemId, sdeRow.name, insertedClass, facts?.effect ?? 'none', facts?.statics ?? []]);
+      }
       await client.query(`INSERT INTO wormholesystems_topology_ownership (map_id,source_identity,item_kind,source_item_id,row_id,managed_json)
         VALUES ($1,$2,'system',$3,$4,$5)`, [mapId, input.sourceIdentity, system.sourceSystemId, rowId, managed]);
       sourceToRow.set(system.sourceSystemId, rowId); result.createdSystems++;
@@ -531,7 +556,6 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
         if (!row || !same(managedConnection(row, input.schemaVersion === 2), expectedManaged)) {
           result.conflicts.push({ itemId: connection.sourceConnectionId, reason: 'managed connection was manually changed; preserved' }); continue;
         }
-        if (signatureReferenceUnresolved) continue;
         const endpointChanged = sourceId !== row.source_id || targetId !== row.target_id;
         const refsChanged = input.schemaVersion === 2 && (sourceSignatureRowId !== (row.source_signature_id ?? null) ||
           targetSignatureRowId !== (row.target_signature_id ?? null));
@@ -545,18 +569,19 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
           (refsChanged && hasManualConnectionData(row, false, false))) {
           result.conflicts.push({ itemId: connection.sourceConnectionId, reason: 'connection has manual data or references; preserved' }); continue;
         }
+        const nextSize = connection.size ?? String(row.size);
         const nextManaged = { sourceConnectionId: connection.sourceConnectionId, sourceId, targetId,
-          connectionType: connection.connectionType, size: connection.size,
+          connectionType: connection.connectionType, size: connection.size ?? previous.size,
           ...(input.schemaVersion === 2 ? { sourceSignatureId: connection.sourceSignatureId, targetSignatureId: connection.targetSignatureId,
             sourceSignatureRowId, targetSignatureRowId } : {}) };
         if (sourceId !== row.source_id || targetId !== row.target_id || connection.connectionType !== row.connection_type ||
-          connection.size !== row.size || refsChanged) {
+          (connection.size !== null && connection.size !== row.size) || refsChanged) {
           if (input.schemaVersion === 2) {
             await client.query(`UPDATE map_connections SET source_id=$1,target_id=$2,connection_type=$3,size=$4,source_signature_id=$5,target_signature_id=$6 WHERE id=$7 AND map_id=$8`,
-              [sourceId, targetId, connection.connectionType, connection.size, sourceSignatureRowId, targetSignatureRowId, owned.row_id, mapId]);
+              [sourceId, targetId, connection.connectionType, nextSize, sourceSignatureRowId, targetSignatureRowId, owned.row_id, mapId]);
           } else {
             await client.query(`UPDATE map_connections SET source_id=$1,target_id=$2,connection_type=$3,size=$4 WHERE id=$5 AND map_id=$6`,
-              [sourceId, targetId, connection.connectionType, connection.size, owned.row_id, mapId]);
+              [sourceId, targetId, connection.connectionType, nextSize, owned.row_id, mapId]);
           }
           result.updatedConnections++;
         }
@@ -579,26 +604,40 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
             (onlyManualCandidate.target_signature_id ?? null) === targetSignatureRowId
           : (onlyManualCandidate.source_signature_id ?? null) === targetSignatureRowId &&
             (onlyManualCandidate.target_signature_id ?? null) === sourceSignatureRowId));
-      const manualCompatible = onlySourceForEndpoints && onlyManualCandidate && !signatureReferenceUnresolved && refsCompatible &&
-        onlyManualCandidate.connection_type === connection.connectionType && onlyManualCandidate.size === connection.size;
+       const manualCompatible = onlySourceForEndpoints && onlyManualCandidate && !signatureReferenceUnresolved && refsCompatible &&
+         onlyManualCandidate.connection_type === connection.connectionType &&
+         (connection.size === null || onlyManualCandidate.size === connection.size);
       if (manualCompatible && onlyManualCandidate) {
         result.preservedConnections++;
         result.mappings.connections.push({ sourceId: connection.sourceConnectionId, rowId: onlyManualCandidate.id, ownership: 'preserved' });
         continue;
       }
       const rowId = crypto.randomUUID();
+      const storedSize = connection.size ?? 'large';
       const managed = { sourceConnectionId: connection.sourceConnectionId, sourceId, targetId,
-        connectionType: connection.connectionType, size: connection.size,
+        connectionType: connection.connectionType, size: storedSize,
         ...(input.schemaVersion === 2 ? { sourceSignatureId: connection.sourceSignatureId, targetSignatureId: connection.targetSignatureId,
           sourceSignatureRowId, targetSignatureRowId } : {}) };
       if (input.schemaVersion === 2) {
-        await client.query(`INSERT INTO map_connections (id,map_id,source_id,target_id,connection_type,size,source_signature_id,target_signature_id)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [rowId, mapId, sourceId, targetId, connection.connectionType, connection.size, sourceSignatureRowId, targetSignatureRowId]);
+        if (connection.size === null) {
+          await client.query(`INSERT INTO map_connections (id,map_id,source_id,target_id,connection_type,source_signature_id,target_signature_id)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+            [rowId, mapId, sourceId, targetId, connection.connectionType, sourceSignatureRowId, targetSignatureRowId]);
+        } else {
+          await client.query(`INSERT INTO map_connections (id,map_id,source_id,target_id,connection_type,size,source_signature_id,target_signature_id)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [rowId, mapId, sourceId, targetId, connection.connectionType, connection.size, sourceSignatureRowId, targetSignatureRowId]);
+        }
       } else {
-        await client.query(`INSERT INTO map_connections (id,map_id,source_id,target_id,connection_type,size) VALUES ($1,$2,$3,$4,$5,$6)`,
-          [rowId, mapId, sourceId, targetId, connection.connectionType, connection.size]);
+        if (connection.size === null) {
+          await client.query(`INSERT INTO map_connections (id,map_id,source_id,target_id,connection_type) VALUES ($1,$2,$3,$4,$5)`,
+            [rowId, mapId, sourceId, targetId, connection.connectionType]);
+        } else {
+          await client.query(`INSERT INTO map_connections (id,map_id,source_id,target_id,connection_type,size) VALUES ($1,$2,$3,$4,$5,$6)`,
+            [rowId, mapId, sourceId, targetId, connection.connectionType, connection.size]);
+        }
       }
+      if (connection.size === null) result.diagnostics.push({ itemId: connection.sourceConnectionId, reason: 'defaulted' });
       await client.query(`INSERT INTO wormholesystems_topology_ownership (map_id,source_identity,item_kind,source_item_id,row_id,managed_json)
         VALUES ($1,$2,'connection',$3,$4,$5)`, [mapId, input.sourceIdentity, connection.sourceConnectionId, rowId, managed]);
       result.createdConnections++;

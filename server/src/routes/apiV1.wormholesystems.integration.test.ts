@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { db } from '../db.js';
 import { generateApiKey } from '../utils/apiKeys.js';
 import { ensureIntegrationDb, seedUser, truncateAll } from '../test/integrationDb.js';
+import { sweepConnLifetimes } from '../services/connLifetimeSweep.js';
+import { sweepAll } from '../services/whSweep.js';
 import { apiV1Router } from './apiV1.js';
 import { keysRouter } from './keys.js';
 import { mapsRouter } from './maps.js';
@@ -136,10 +138,21 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     const created = await sendTopology(payload);
     expect(created.status).toBe(200);
     expect(created.body).toMatchObject({ createdSystems: 2, createdConnections: 1 });
+    const beforeReplay = await db.query(`SELECT id,created_at FROM map_systems WHERE map_id=$1 ORDER BY id`, [mapId]);
+    const beforeReplayConnections = await db.query(`SELECT id,created_at FROM map_connections WHERE map_id=$1 ORDER BY id`, [mapId]);
+    const beforeReplayOwnership = await db.query(`SELECT item_kind,source_item_id,row_id,managed_json
+      FROM wormholesystems_topology_ownership WHERE map_id=$1 ORDER BY item_kind,source_item_id`, [mapId]);
     const replay = await sendTopology(payload);
     expect(replay.status).toBe(200);
     expect(replay.body).toMatchObject({ createdSystems: 2, createdConnections: 1, updatedSystems: 0, updatedConnections: 0,
       checkpoint: { accepted: true, replayed: true, partial: false } });
+    expect((await db.query(`SELECT id,created_at FROM map_systems WHERE map_id=$1 ORDER BY id`, [mapId])).rows)
+      .toEqual(beforeReplay.rows);
+    expect((await db.query(`SELECT id,created_at FROM map_connections WHERE map_id=$1 ORDER BY id`, [mapId])).rows)
+      .toEqual(beforeReplayConnections.rows);
+    expect((await db.query(`SELECT item_kind,source_item_id,row_id,managed_json
+      FROM wormholesystems_topology_ownership WHERE map_id=$1 ORDER BY item_kind,source_item_id`, [mapId])).rows)
+      .toEqual(beforeReplayOwnership.rows);
 
     const older = structuredClone(payload);
     older.snapshot = { complete: true, fetchedAt: new Date(Date.parse(payload.snapshot.fetchedAt) - 1_000).toISOString() };
@@ -448,7 +461,7 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     retargeted.connections[0].toSourceSystemId = 'endpoint-3';
     const result = await sendTopology({ ...retargeted, snapshot: freshSnapshot() });
     expect(result.body.updatedConnections).toBe(0);
-    expect(result.body.conflicts).toContainEqual({ itemId: 'endpoint-edge', reason: 'connection endpoints have manual references; preserved' });
+    expect(result.body.conflicts).toContainEqual({ itemId: 'endpoint-edge', reason: 'connection has manual data or references; preserved' });
 
     const systems = await db.query<{ id: string; eve_system_id: number }>(`SELECT id,eve_system_id FROM map_systems WHERE map_id=$1`, [mapId]);
     const originalSource = systems.rows.find(system => Number(system.eve_system_id) === 31_000_001)!.id;
@@ -831,6 +844,125 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
       source_id: sourceSig.system_id, target_id: targetSig.system_id });
   });
 
+  it('preserves source edges with null refs when a signature row is unresolved or incompatible', async () => {
+    const initial = v2Topology({
+      signatures: [{ sourceSignatureId: 'owned-edge-sig', sourceSystemId: 'member-1', sourceConnectionId: 'edge-one',
+        sigId: 'OWN-201', sigType: 'wormhole', whType: 'WH-SYNTH-10' }],
+      connections: [{ sourceConnectionId: 'edge-one', fromSourceSystemId: 'member-1', toSourceSystemId: 'member-2',
+        connection_type: 'standard', ship_size: 'large', sourceSignatureId: 'owned-edge-sig' }],
+    });
+    expect((await sendTopology(initial)).body.createdConnections).toBe(1);
+    const systems = await db.query<{ id: string; eve_system_id: number }>(
+      'SELECT id,eve_system_id FROM map_systems WHERE map_id=$1 ORDER BY eve_system_id', [mapId]);
+    await db.query(`UPDATE map_signatures SET sig_type='relic' WHERE sig_id='OWN-201'`);
+    await db.query(`INSERT INTO map_signatures (id,system_id,sig_id,sig_type,wh_type) VALUES ($1,$2,'MAN-201','relic','')`,
+      [crypto.randomUUID(), systems.rows[0].id]);
+
+    const next = structuredClone(initial) as any;
+    next.snapshot = await newerSnapshot(initial.snapshot.fetchedAt);
+    next.signatures.push({ sourceSignatureId: 'manual-edge-sig', sourceSystemId: 'member-1', sourceConnectionId: 'edge-two',
+      sigId: 'MAN-201', sigType: 'data', whType: '' });
+    next.connections.push({ sourceConnectionId: 'edge-two', fromSourceSystemId: 'member-1', toSourceSystemId: 'member-2',
+      connection_type: 'standard', ship_size: 'large', sourceSignatureId: 'manual-edge-sig' });
+
+    const result = await sendTopology(next);
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ updatedConnections: 1, createdConnections: 1, checkpoint: { partial: true },
+      mappings: { connections: expect.arrayContaining([
+        { sourceId: 'edge-one', ownership: 'owned' }, { sourceId: 'edge-two', ownership: 'owned' },
+      ]) } });
+    expect(result.body.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ itemId: 'edge-one', reason: expect.stringContaining('signature is unresolved') }),
+      expect.objectContaining({ itemId: 'edge-two', reason: expect.stringContaining('signature is unresolved') }),
+    ]));
+    expect((await db.query<{ source_item_id: string; source_signature_id: string | null; target_signature_id: string | null }>(
+      `SELECT o.source_item_id,c.source_signature_id,c.target_signature_id FROM map_connections c
+        JOIN wormholesystems_topology_ownership o ON o.map_id=c.map_id AND o.item_kind='connection' AND o.row_id=c.id
+       WHERE c.map_id=$1 ORDER BY o.source_item_id`, [mapId])).rows)
+      .toEqual([{ source_item_id: 'edge-one', source_signature_id: null, target_signature_id: null },
+        { source_item_id: 'edge-two', source_signature_id: null, target_signature_id: null }]);
+  });
+
+  it('uses database defaults only for absent positions and sizes, preserving existing values', async () => {
+    const payload = v2Topology({
+      systems: [
+        { sourceSystemId: 'member-1', eveSystemId: 31_000_001 },
+        { sourceSystemId: 'member-2', eveSystemId: 31_000_002, positionX: null, positionY: null },
+      ],
+      connections: [{ sourceConnectionId: 'default-size-edge', fromSourceSystemId: 'member-1', toSourceSystemId: 'member-2',
+        connection_type: 'standard', ship_size: null }],
+    });
+    const created = await sendTopology(payload);
+    expect(created.status).toBe(200);
+    expect(created.body.diagnostics).toEqual(expect.arrayContaining([
+      { itemId: 'member-1', reason: 'position_unavailable' }, { itemId: 'member-2', reason: 'position_unavailable' },
+      { itemId: 'default-size-edge', reason: 'defaulted' },
+    ]));
+    expect((await db.query<{ eve_system_id: number; position_x: number; position_y: number }>(
+      'SELECT eve_system_id,position_x,position_y FROM map_systems WHERE map_id=$1 ORDER BY eve_system_id', [mapId])).rows)
+      .toEqual([{ eve_system_id: 31_000_001, position_x: 0, position_y: 0 },
+        { eve_system_id: 31_000_002, position_x: 0, position_y: 0 }]);
+    expect((await db.query<{ size: string }>('SELECT size FROM map_connections WHERE map_id=$1', [mapId])).rows)
+      .toEqual([{ size: 'large' }]);
+
+    await db.query(`UPDATE map_systems SET position_x=77 WHERE map_id=$1 AND eve_system_id=31000001`, [mapId]);
+    await db.query(`UPDATE map_connections SET size='small' WHERE map_id=$1`, [mapId]);
+    const replay = await sendTopology({ ...payload, snapshot: await newerSnapshot(payload.snapshot.fetchedAt) });
+    expect(replay.body).toMatchObject({ updatedSystems: 0, updatedConnections: 0, checkpoint: { partial: true },
+      conflicts: expect.arrayContaining([expect.objectContaining({ itemId: 'default-size-edge', reason: 'managed connection was manually changed; preserved' })]) });
+    expect((await db.query<{ position_x: number }>(
+      'SELECT position_x FROM map_systems WHERE map_id=$1 AND eve_system_id=31000001', [mapId])).rows[0].position_x).toBe(77);
+    expect((await db.query<{ size: string }>('SELECT size FROM map_connections WHERE map_id=$1', [mapId])).rows[0].size).toBe('small');
+  });
+
+  it('locks maps before sweep item writes and preserves source-owned records from autonomous expiry', async () => {
+    await db.query(`UPDATE maps SET lazy_remove_wormholes=TRUE,collapse_grace_hours=0 WHERE id=$1`, [mapId]);
+    const topology = v2Topology({
+      signatures: [{ sourceSignatureId: 'sweep-owned-signature', sourceSystemId: 'member-1', sourceConnectionId: 'sweep-owned-edge',
+        sigId: 'SWP-201', sigType: 'wormhole', whType: 'C247' }],
+      connections: [{ sourceConnectionId: 'sweep-owned-edge', fromSourceSystemId: 'member-1', toSourceSystemId: 'member-2',
+        connection_type: 'standard', ship_size: 'large', sourceSignatureId: 'sweep-owned-signature' }],
+    });
+    expect((await sendTopology(topology)).body.createdConnections).toBe(1);
+    const systemId = (await db.query<{ id: string }>(`SELECT id FROM map_systems WHERE map_id=$1 AND eve_system_id=31000002`, [mapId])).rows[0].id;
+    const manualSignatureId = crypto.randomUUID();
+    await db.query(`INSERT INTO map_signatures (id,system_id,sig_id,sig_type,wh_type,created_at)
+      VALUES ($1,$2,'SWP-202','wormhole','C247',NOW()-INTERVAL '3 days')`, [manualSignatureId, systemId]);
+    await db.query(`UPDATE map_signatures SET created_at=NOW()-INTERVAL '3 days' WHERE sig_id='SWP-201'`);
+    await db.query(`UPDATE map_connections SET lifetime_expires_at=NOW()-INTERVAL '1 day' WHERE map_id=$1`, [mapId]);
+
+    await sweepConnLifetimes();
+    expect((await db.query<{ broken: boolean }>(`SELECT broken FROM map_connections WHERE map_id=$1`, [mapId])).rows)
+      .toEqual([{ broken: false }]);
+
+    const blocker = await db.connect();
+    let held = false;
+    let pendingSweep: Promise<void> | undefined;
+    try {
+      await blocker.query('BEGIN');
+      held = true;
+      await blocker.query('SELECT id FROM maps WHERE id=$1 FOR UPDATE', [mapId]);
+      const blockerPid = (await blocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+      pendingSweep = sweepAll();
+      expect(await waitForLockWait('SELECT id FROM maps WHERE id=$1 FOR UPDATE', blockerPid)).not.toBeNull();
+      expect((await db.query('SELECT 1 FROM map_signatures WHERE id=ANY($1::uuid[])',
+        [[manualSignatureId, (await db.query<{ id: string }>(`SELECT id FROM map_signatures WHERE sig_id='SWP-201'`)).rows[0].id]])).rows)
+        .toHaveLength(2);
+      await blocker.query('COMMIT');
+      held = false;
+      await pendingSweep;
+    } finally {
+      if (held) await blocker.query('ROLLBACK');
+      if (pendingSweep) await Promise.allSettled([pendingSweep]);
+      blocker.release();
+    }
+    expect((await db.query('SELECT 1 FROM map_signatures WHERE id=$1', [manualSignatureId])).rows).toHaveLength(0);
+    expect((await db.query(`SELECT 1 FROM map_signatures s JOIN wormholesystems_topology_ownership o
+      ON o.map_id=$1 AND o.item_kind='signature' AND o.row_id=s.id WHERE s.sig_id='SWP-201'`, [mapId])).rows).toHaveLength(1);
+    expect((await db.query<{ broken: boolean }>(`SELECT broken FROM map_connections WHERE map_id=$1`, [mapId])).rows)
+      .toEqual([{ broken: false }]);
+  }, 15_000);
+
   it('preserves matching manual signatures without ownership and reports managed-field conflicts', async () => {
     const systemId = crypto.randomUUID();
     await db.query(`INSERT INTO map_systems (id,map_id,eve_system_id,name,system_class) VALUES ($1,$2,31000001,'Manual','C2')`, [systemId, mapId]);
@@ -876,8 +1008,9 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     const referencedSignature = (await db.query<{ id: string; system_id: string }>(
       `SELECT id,system_id FROM map_signatures WHERE sig_id='GHI-789'`)).rows[0];
     const otherSystem = (await db.query<{ id: string }>(`SELECT id FROM map_systems WHERE map_id=$1 AND eve_system_id=31000002`, [mapId])).rows[0].id;
-    await db.query(`INSERT INTO map_connections (map_id,source_id,target_id,connection_type,source_signature_id)
-      VALUES ($1,$2,$3,'standard',$4)`, [mapId, referencedSignature.system_id, otherSystem, referencedSignature.id]);
+    await db.query(`INSERT INTO map_connections (id,map_id,source_id,target_id,connection_type,source_signature_id)
+      VALUES ($1,$2,$3,$4,'standard',$5)`,
+      [crypto.randomUUID(), mapId, referencedSignature.system_id, otherSystem, referencedSignature.id]);
     const removed = await sendTopology({ ...payload, snapshot: await newerSnapshot(payload.snapshot.fetchedAt), signatures: [] });
     expect(removed.body).toMatchObject({ deletedSignatures: 1, checkpoint: { partial: true }, conflicts: expect.arrayContaining([
       expect.objectContaining({ itemId: 'annotated-signature', reason: 'removed source signature has manual data, changed fields, or connection references; preserved' }),

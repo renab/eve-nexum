@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { publishToMap } from './mapEvents.js';
 import { whLifetimeHours } from '../data/whLifetimes.js';
+import { withMapRowLock } from './mapRowLock.js';
 
 const log = createLogger('whSweep');
 
@@ -87,26 +88,60 @@ function wasBackedByDeleted(
  * connection.update flips `broken` on the edge).
  */
 async function sweepMap(mapId: string, expired: CandidateRow[]): Promise<void> {
-  const expiredIds = expired.map((e) => e.id);
-  const client = await db.connect();
+  let removed: CandidateRow[] = [];
   let brokenIds: string[] = [];
   try {
-    await client.query('BEGIN');
-
+    const outcome = await withMapRowLock(mapId, async (client) => {
+      const current = await client.query<CandidateRow>(
+        `SELECT s.id,s.system_id AS "systemId",sys.map_id AS "mapId",s.wh_type AS "whType",
+                s.wh_leads_to AS "whLeadsTo",s.created_at AS "createdAt",m.collapse_grace_hours AS "graceHours"
+           FROM map_signatures s JOIN map_systems sys ON sys.id=s.system_id JOIN maps m ON m.id=sys.map_id
+          WHERE s.id=ANY($1::uuid[]) AND sys.map_id=$2 AND m.lazy_remove_wormholes=TRUE AND s.sig_type='wormhole'
+            AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+              WHERE o.map_id=$2 AND o.item_kind='signature' AND o.row_id=s.id)
+            AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+              JOIN map_connections owned_c ON owned_c.map_id=o.map_id AND owned_c.id=o.row_id
+              WHERE o.map_id=$2 AND o.item_kind='connection'
+                AND (owned_c.source_signature_id=s.id OR owned_c.target_signature_id=s.id))
+            AND (NOT $3::boolean OR NOT EXISTS (SELECT 1 FROM map_connections c
+              WHERE (c.source_signature_id=s.id OR c.target_signature_id=s.id) AND c.lifetime_expires_at IS NOT NULL))
+          FOR UPDATE OF s`, [expired.map((row) => row.id), mapId, config.connLifetimeSweepMinutes > 0]);
+      const now = Date.now();
+      const stillExpired = current.rows.filter((row) => {
+        const maxHours = whLifetimeHours(row.whType);
+        return maxHours !== null && (now - new Date(row.createdAt).getTime()) / 3_600_000 > maxHours + row.graceHours;
+      });
+      if (stillExpired.length === 0) return { removed: [], brokenIds: [] as string[] };
+      const deleted = await client.query<{ id: string }>(
+        `DELETE FROM map_signatures s USING map_systems sys
+          WHERE s.id = ANY($1::uuid[]) AND sys.id=s.system_id AND sys.map_id=$2
+            AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+              WHERE o.map_id=$2 AND o.item_kind='signature' AND o.row_id=s.id)
+            AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+              JOIN map_connections owned_c ON owned_c.map_id=o.map_id AND owned_c.id=o.row_id
+              WHERE o.map_id=$2 AND o.item_kind='connection'
+                AND (owned_c.source_signature_id=s.id OR owned_c.target_signature_id=s.id))
+          RETURNING s.id`, [stillExpired.map((row) => row.id), mapId]);
+      const currentById = new Map(stillExpired.map((row) => [row.id, row]));
+      removed = deleted.rows.flatMap((row) => {
+        const candidate = currentById.get(row.id);
+        return candidate ? [candidate] : [];
+      });
+      if (removed.length === 0) return { removed, brokenIds: [] as string[] };
     // Sequential, not Promise.all — concurrent queries on one pooled tx client
     // are serialised by node-pg anyway and the parallel form is deprecated (pg@9).
-    const sysRes = await client.query<SysRow>(
+      const sysRes = await client.query<SysRow>(
       `SELECT id, name, system_class AS "systemClass" FROM map_systems WHERE map_id = $1`, [mapId]);
-    const connRes = await client.query<ConnRow>(
+      const connRes = await client.query<ConnRow>(
       `SELECT id, source_id AS "sourceId", target_id AS "targetId", wh_type AS "type",
-              connection_type AS "connectionType", broken
-         FROM map_connections WHERE map_id = $1`, [mapId]);
-
-    await client.query(`DELETE FROM map_signatures WHERE id = ANY($1::uuid[])`, [expiredIds]);
+               connection_type AS "connectionType", broken
+          FROM map_connections c WHERE map_id = $1
+            AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+              WHERE o.map_id=c.map_id AND o.item_kind='connection' AND o.row_id=c.id)`, [mapId]);
 
     // Backing sigs that REMAIN after the delete — query post-delete so we don't
     // have to reconcile the removed rows by hand.
-    const sigRes = await client.query<SigRow>(
+      const sigRes = await client.query<SigRow>(
       `SELECT s.system_id AS "systemId", s.wh_type AS "whType", s.wh_leads_to AS "whLeadsTo"
          FROM map_signatures s JOIN map_systems sys ON sys.id = s.system_id
         WHERE sys.map_id = $1 AND s.wh_type <> '' AND s.wh_leads_to <> ''`, [mapId]);
@@ -118,37 +153,37 @@ async function sweepMap(mapId: string, expired: CandidateRow[]): Promise<void> {
       if (list) list.push(sig); else sigsBySystem.set(sig.systemId, [sig]);
     }
 
-    brokenIds = connRes.rows
+      brokenIds = connRes.rows
       .filter((c) => c.connectionType === 'standard' && !c.broken)
-      .filter((c) => wasBackedByDeleted(c, expired, systemsById))
+      .filter((c) => wasBackedByDeleted(c, removed, systemsById))
       .filter((c) => !isBacked(c, sigsBySystem, systemsById))
       .map((c) => c.id);
 
-    if (brokenIds.length > 0) {
-      await client.query(
-        `UPDATE map_connections SET broken = TRUE, broken_at = NOW() WHERE id = ANY($1::uuid[])`, [brokenIds]);
-    }
-    await client.query(`UPDATE maps SET updated_at = NOW() WHERE id = $1`, [mapId]);
-
-    await client.query('COMMIT');
+      if (brokenIds.length > 0) {
+        await client.query(
+          `UPDATE map_connections SET broken = TRUE, broken_at = NOW() WHERE map_id=$1 AND id = ANY($2::uuid[])`, [mapId, brokenIds]);
+      }
+      await client.query(`UPDATE maps SET updated_at = NOW() WHERE id = $1`, [mapId]);
+      return { removed, brokenIds };
+    });
+    removed = outcome.removed;
+    brokenIds = outcome.brokenIds;
   } catch (err) {
-    await client.query('ROLLBACK');
     log.warn(`sweep failed for map ${mapId}: ${err instanceof Error ? err.message : String(err)}`);
     return;
-  } finally {
-    client.release();
   }
+  if (removed.length === 0) return;
 
   // Broadcast outside the transaction. Server-originated → actor null so every
   // connected client applies it (none will match their own CLIENT_ID).
-  const affectedSystems = new Set(expired.map((e) => e.systemId));
+  const affectedSystems = new Set(removed.map((e) => e.systemId));
   for (const systemId of affectedSystems) {
     publishToMap(mapId, { type: 'sig.changed', actor: null, systemId });
   }
   for (const id of brokenIds) {
     publishToMap(mapId, { type: 'connection.update', actor: null, id, updates: { broken: true } });
   }
-  log.info(`map ${mapId}: removed ${expiredIds.length} aged WH sig(s), quarantined ${brokenIds.length} connection(s)`);
+  log.info(`map ${mapId}: removed ${removed.length} aged WH sig(s), quarantined ${brokenIds.length} connection(s)`);
 }
 
 /**
@@ -165,33 +200,48 @@ async function removeStaleBrokenConnections(): Promise<void> {
   const hours = config.brokenConnRemoveHours;
   if (hours <= 0) return;
 
-  let rows: Array<{ id: string; mapId: string }>;
+  let mapIds: string[];
   try {
-    const res = await db.query<{ id: string; mapId: string }>(
-      `DELETE FROM map_connections c
-        USING maps m
-        WHERE m.id = c.map_id
-          AND m.lazy_remove_wormholes = TRUE
-          AND c.broken = TRUE
-          AND c.broken_at IS NOT NULL
-          AND c.broken_at < NOW() - ($1 || ' hours')::interval
-        RETURNING c.id, c.map_id AS "mapId"`,
+    const res = await db.query<{ mapId: string }>(
+      `SELECT DISTINCT c.map_id AS "mapId" FROM map_connections c
+        JOIN maps m ON m.id=c.map_id
+       WHERE m.lazy_remove_wormholes=TRUE AND c.broken=TRUE AND c.broken_at IS NOT NULL
+         AND c.broken_at < NOW() - ($1 || ' hours')::interval
+         AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+           WHERE o.map_id=c.map_id AND o.item_kind='connection' AND o.row_id=c.id)
+         AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+           WHERE o.map_id=c.map_id AND o.item_kind='signature'
+             AND (o.row_id=c.source_signature_id OR o.row_id=c.target_signature_id))`,
       [String(hours)],
     );
-    rows = res.rows;
+    mapIds = res.rows.map((row) => row.mapId);
   } catch (err) {
     log.warn(`broken-connection cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
-  if (rows.length === 0) return;
-
-  const byMap = new Map<string, string[]>();
-  for (const r of rows) {
-    const list = byMap.get(r.mapId);
-    if (list) list.push(r.id); else byMap.set(r.mapId, [r.id]);
-  }
-  for (const [mapId, ids] of byMap) {
-    await db.query(`UPDATE maps SET updated_at = NOW() WHERE id = $1`, [mapId]).catch(() => {});
+  for (const mapId of mapIds) {
+    let ids: string[];
+    try {
+      ids = await withMapRowLock(mapId, async (client) => {
+        const deleted = await client.query<{ id: string }>(
+          `DELETE FROM map_connections c
+            WHERE c.map_id=$1 AND c.broken=TRUE AND c.broken_at IS NOT NULL
+              AND c.broken_at < NOW() - ($2 || ' hours')::interval
+              AND EXISTS (SELECT 1 FROM maps m WHERE m.id=c.map_id AND m.lazy_remove_wormholes=TRUE)
+              AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+                WHERE o.map_id=c.map_id AND o.item_kind='connection' AND o.row_id=c.id)
+              AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+                WHERE o.map_id=c.map_id AND o.item_kind='signature'
+                  AND (o.row_id=c.source_signature_id OR o.row_id=c.target_signature_id))
+            RETURNING c.id`, [mapId, String(hours)]);
+        if (deleted.rows.length) await client.query(`UPDATE maps SET updated_at=NOW() WHERE id=$1`, [mapId]);
+        return deleted.rows.map((row) => row.id);
+      });
+    } catch (err) {
+      log.warn(`broken-connection cleanup failed for map ${mapId}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    if (ids.length === 0) continue;
     for (const id of ids) publishToMap(mapId, { type: 'connection.remove', actor: null, id });
     log.info(`map ${mapId}: removed ${ids.length} connection(s) broken for over ${hours}h`);
   }
@@ -217,8 +267,14 @@ export async function sweepAll(): Promise<void> {
          JOIN map_systems sys ON sys.id = s.system_id
          JOIN maps m ON m.id = sys.map_id
         WHERE m.lazy_remove_wormholes = TRUE
-          AND s.sig_type = 'wormhole'
-          AND s.created_at < NOW() - ($1 || ' hours')::interval
+           AND s.sig_type = 'wormhole'
+           AND s.created_at < NOW() - ($1 || ' hours')::interval
+           AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+             WHERE o.map_id=sys.map_id AND o.item_kind='signature' AND o.row_id=s.id)
+           AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+             JOIN map_connections owned_c ON owned_c.map_id=o.map_id AND owned_c.id=o.row_id
+             WHERE o.map_id=sys.map_id AND o.item_kind='connection'
+               AND (owned_c.source_signature_id=s.id OR owned_c.target_signature_id=s.id))
           AND (NOT $2::boolean OR NOT EXISTS (
                 SELECT 1 FROM map_connections c
                  WHERE (c.source_signature_id = s.id OR c.target_signature_id = s.id)
@@ -260,48 +316,54 @@ export async function sweepAll(): Promise<void> {
  * wh_type) are left alone. Mirrors the client check in SignaturePane.
  */
 async function quarantineOrphans(): Promise<void> {
-  let rows: Array<{ id: string; mapId: string }>;
+  let mapIds: string[];
   try {
-    const res = await db.query<{ id: string; map_id: string }>(`
-      WITH sig_stats AS (
-        SELECT system_id,
-               COUNT(*) AS n,
-               COUNT(*) FILTER (
-                 WHERE sig_type IN ('wormhole','unknown') OR COALESCE(wh_type,'') <> ''
-               ) AS wh
-          FROM map_signatures
-         GROUP BY system_id
-      ),
-      scanned_no_wh AS (
-        SELECT system_id FROM sig_stats WHERE n > 0 AND wh = 0
-      )
-      UPDATE map_connections c
-         SET broken = TRUE, broken_at = NOW()
-       WHERE c.connection_type = 'standard'
-         AND c.broken = FALSE
-         AND COALESCE(c.wh_type, '') <> ''
-         AND (c.source_id IN (SELECT system_id FROM scanned_no_wh)
-           OR c.target_id IN (SELECT system_id FROM scanned_no_wh))
-      RETURNING c.id, c.map_id AS "map_id"`);
-    rows = res.rows.map((r) => ({ id: r.id, mapId: r.map_id }));
+    const res = await db.query<{ mapId: string }>(`SELECT DISTINCT c.map_id AS "mapId" FROM map_connections c
+      WHERE c.connection_type='standard' AND c.broken=FALSE AND COALESCE(c.wh_type,'')<>''
+        AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+          WHERE o.map_id=c.map_id AND o.item_kind='connection' AND o.row_id=c.id)
+        AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+          WHERE o.map_id=c.map_id AND o.item_kind='signature'
+            AND (o.row_id=c.source_signature_id OR o.row_id=c.target_signature_id))`);
+    mapIds = res.rows.map((row) => row.mapId);
   } catch (err) {
     log.warn(`orphan quarantine failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
-  if (rows.length === 0) return;
-
-  const byMap = new Map<string, string[]>();
-  for (const r of rows) {
-    const list = byMap.get(r.mapId);
-    if (list) list.push(r.id); else byMap.set(r.mapId, [r.id]);
-  }
-  for (const [mapId, ids] of byMap) {
-    await db.query(`UPDATE maps SET updated_at = NOW() WHERE id = $1`, [mapId]).catch(() => {});
+  let changedCount = 0;
+  for (const mapId of mapIds) {
+    let ids: string[];
+    try {
+      ids = await withMapRowLock(mapId, async (client) => {
+        const result = await client.query<{ id: string }>(`
+          WITH sig_stats AS (
+            SELECT s.system_id, COUNT(*) AS n,
+                   COUNT(*) FILTER (WHERE s.sig_type IN ('wormhole','unknown') OR COALESCE(s.wh_type,'')<>'') AS wh
+              FROM map_signatures s JOIN map_systems sys ON sys.id=s.system_id
+             WHERE sys.map_id=$1 GROUP BY s.system_id
+          ), scanned_no_wh AS (SELECT system_id FROM sig_stats WHERE n>0 AND wh=0)
+          UPDATE map_connections c SET broken=TRUE, broken_at=NOW()
+           WHERE c.map_id=$1 AND c.connection_type='standard' AND c.broken=FALSE AND COALESCE(c.wh_type,'')<>''
+             AND (c.source_id IN (SELECT system_id FROM scanned_no_wh) OR c.target_id IN (SELECT system_id FROM scanned_no_wh))
+             AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+               WHERE o.map_id=c.map_id AND o.item_kind='connection' AND o.row_id=c.id)
+             AND NOT EXISTS (SELECT 1 FROM wormholesystems_topology_ownership o
+               WHERE o.map_id=c.map_id AND o.item_kind='signature'
+                 AND (o.row_id=c.source_signature_id OR o.row_id=c.target_signature_id))
+          RETURNING c.id`, [mapId]);
+        if (result.rows.length) await client.query(`UPDATE maps SET updated_at=NOW() WHERE id=$1`, [mapId]);
+        return result.rows.map((row) => row.id);
+      });
+    } catch (err) {
+      log.warn(`orphan quarantine failed for map ${mapId}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    changedCount += ids.length;
     for (const id of ids) {
       publishToMap(mapId, { type: 'connection.update', actor: null, id, updates: { broken: true } });
     }
   }
-  log.info(`quarantined ${rows.length} orphaned connection(s) across ${byMap.size} map(s)`);
+  if (changedCount) log.info(`quarantined ${changedCount} orphaned connection(s) across ${mapIds.length} map(s)`);
 }
 
 /**
