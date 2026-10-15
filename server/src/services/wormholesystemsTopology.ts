@@ -182,7 +182,7 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
           `SELECT id, eve_system_id, position_x, position_y, name, system_class, notes, labels, custom_labels, intel, tag, alias
              FROM map_systems WHERE id=$1 AND map_id=$2 FOR UPDATE`, [owned.row_id, mapId]);
         const row = current.rows[0];
-        if (!row || Number(row.eve_system_id) !== system.eveSystemId) {
+        if (!row) {
           result.conflicts.push({ itemId: system.sourceSystemId, reason: 'owned system identity no longer matches source' }); continue;
         }
         const previous = owned.managed_json as any;
@@ -191,11 +191,20 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
           result.conflicts.push({ itemId: system.sourceSystemId, reason: 'managed system was manually changed; preserved' });
           sourceToRow.set(system.sourceSystemId, owned.row_id); continue;
         }
+        if (Number(row.eve_system_id) !== system.eveSystemId) {
+          const target = await client.query<{ id: string }>(
+            `SELECT id FROM map_systems WHERE map_id=$1 AND eve_system_id=$2 AND id<>$3`,
+            [mapId, system.eveSystemId, owned.row_id]);
+          if (target.rows.length) {
+            result.conflicts.push({ itemId: system.sourceSystemId, reason: 'new EVE system identity is already represented by another map system; preserved' });
+            sourceToRow.set(system.sourceSystemId, owned.row_id); continue;
+          }
+        }
         const nextManaged = { sourceSystemId: system.sourceSystemId, eveSystemId: system.eveSystemId, positionX: system.positionX,
           positionY: system.positionY, name: sdeRow.name, systemClass: sdeRow.systemClass };
-        if (system.positionX !== Number(row.position_x) || system.positionY !== Number(row.position_y) || sdeRow.name !== row.name || sdeRow.systemClass !== row.system_class) {
-          await client.query(`UPDATE map_systems SET position_x=$1, position_y=$2, name=$3, system_class=$4 WHERE id=$5 AND map_id=$6`,
-            [system.positionX, system.positionY, sdeRow.name, sdeRow.systemClass, owned.row_id, mapId]);
+        if (Number(row.eve_system_id) !== system.eveSystemId || system.positionX !== Number(row.position_x) || system.positionY !== Number(row.position_y) || sdeRow.name !== row.name || sdeRow.systemClass !== row.system_class) {
+          await client.query(`UPDATE map_systems SET eve_system_id=$1, position_x=$2, position_y=$3, name=$4, system_class=$5 WHERE id=$6 AND map_id=$7`,
+            [system.eveSystemId, system.positionX, system.positionY, sdeRow.name, sdeRow.systemClass, owned.row_id, mapId]);
           result.updatedSystems++;
         }
         await client.query(`UPDATE wormholesystems_topology_ownership SET managed_json=$1 WHERE map_id=$2 AND source_identity=$3 AND item_kind='system' AND source_item_id=$4`,

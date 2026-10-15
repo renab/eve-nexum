@@ -7,12 +7,18 @@ import { generateApiKey } from '../utils/apiKeys.js';
 import { ensureIntegrationDb, seedUser, truncateAll } from '../test/integrationDb.js';
 import { apiV1Router } from './apiV1.js';
 import { keysRouter } from './keys.js';
+import { mapsRouter } from './maps.js';
 
 const dbReady = await ensureIntegrationDb();
 const sourceIdentity = 'wormholesystems:["https://source.example","map-1"]';
 
 function freshSnapshot(complete = true) {
   return { complete, fetchedAt: new Date().toISOString() };
+}
+
+async function newerSnapshot(previousFetchedAt: string) {
+  while (Date.now() <= Date.parse(previousFetchedAt)) await new Promise(resolve => setTimeout(resolve, 1));
+  return freshSnapshot();
 }
 
 describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (integration)', () => {
@@ -26,6 +32,30 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     server.use(express.json());
     server.use('/api/v1', apiV1Router);
     return server;
+  }
+
+  function mapsApp() {
+    const server = express();
+    server.use(express.json());
+    server.use((req, _res, next) => {
+      (req as unknown as { session: Record<string, unknown> }).session = {
+        userId, characterId: 8_800_000_001, role: 'admin', userCorpId: null, userAllianceId: null,
+      };
+      next();
+    });
+    server.use('/api/maps', mapsRouter);
+    return server;
+  }
+
+  async function waitForLockWait(queryFragment: string): Promise<boolean> {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const waiting = await db.query<{ waiting: boolean }>(`SELECT EXISTS (
+        SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE $1
+      ) AS waiting`, [`%${queryFragment}%`]);
+      if (waiting.rows[0].waiting) return true;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    return false;
   }
 
   function keysApp(sessionUserId: number, ownerId: number) {
@@ -165,6 +195,74 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     expect((await sendTopology({ ...moved, snapshot: freshSnapshot(), systems: [], connections: [] })).body.deletedSystems).toBe(2);
   });
 
+  it('remaps an unchanged source-owned system to a new EVE ID and updates its ownership baseline', async () => {
+    await db.query(`INSERT INTO solar_systems (id,name,class) VALUES (31000003,'J100003','C4')`);
+    const payload = {
+      sourceIdentity, snapshot: freshSnapshot(),
+      systems: [{ sourceSystemId: 'remap-member', eveSystemId: 31_000_001, positionX: 10, positionY: 20 }],
+      connections: [],
+    };
+    expect((await sendTopology(payload)).body.createdSystems).toBe(1);
+    const before = (await db.query<{ id: string }>('SELECT id FROM map_systems WHERE map_id=$1', [mapId])).rows[0].id;
+    const remapped = { ...payload, snapshot: await newerSnapshot(payload.snapshot.fetchedAt),
+      systems: [{ ...payload.systems[0], eveSystemId: 31_000_003 }] };
+
+    const result = await sendTopology(remapped);
+    expect(result.body).toMatchObject({ updatedSystems: 1, conflicts: [] });
+    expect((await db.query('SELECT id,eve_system_id FROM map_systems WHERE map_id=$1', [mapId])).rows)
+      .toEqual([{ id: before, eve_system_id: 31_000_003 }]);
+    expect((await db.query<{ managed_json: Record<string, unknown> }>(
+      `SELECT managed_json FROM wormholesystems_topology_ownership WHERE map_id=$1 AND source_item_id='remap-member'`, [mapId])).rows[0].managed_json)
+      .toMatchObject({ eveSystemId: 31_000_003 });
+  });
+
+  it('preserves a manually edited owned system instead of treating its EVE-ID change as a managed remap', async () => {
+    await db.query(`INSERT INTO solar_systems (id,name,class) VALUES (31000003,'J100003','C4')`);
+    const payload = {
+      sourceIdentity, snapshot: freshSnapshot(),
+      systems: [{ sourceSystemId: 'edited-remap-member', eveSystemId: 31_000_001, positionX: 10, positionY: 20 }],
+      connections: [],
+    };
+    expect((await sendTopology(payload)).body.createdSystems).toBe(1);
+    await db.query('UPDATE map_systems SET position_x=99 WHERE map_id=$1', [mapId]);
+    const remapped = { ...payload, snapshot: await newerSnapshot(payload.snapshot.fetchedAt),
+      systems: [{ ...payload.systems[0], eveSystemId: 31_000_003 }] };
+
+    const result = await sendTopology(remapped);
+    expect(result.body).toMatchObject({ updatedSystems: 0, conflicts: [
+      { itemId: 'edited-remap-member', reason: 'managed system was manually changed; preserved' },
+    ] });
+    expect((await db.query('SELECT eve_system_id,position_x FROM map_systems WHERE map_id=$1', [mapId])).rows)
+      .toEqual([{ eve_system_id: 31_000_001, position_x: 99 }]);
+    expect((await db.query<{ managed_json: Record<string, unknown> }>(
+      `SELECT managed_json FROM wormholesystems_topology_ownership WHERE map_id=$1`, [mapId])).rows[0].managed_json)
+      .toMatchObject({ eveSystemId: 31_000_001 });
+  });
+
+  it('preserves a managed system when its remap target is already represented by another map system', async () => {
+    await db.query(`INSERT INTO solar_systems (id,name,class) VALUES (31000003,'J100003','C4')`);
+    const payload = {
+      sourceIdentity, snapshot: freshSnapshot(),
+      systems: [{ sourceSystemId: 'duplicate-remap-member', eveSystemId: 31_000_001, positionX: 10, positionY: 20 }],
+      connections: [],
+    };
+    expect((await sendTopology(payload)).body.createdSystems).toBe(1);
+    await db.query(`INSERT INTO map_systems (id,map_id,eve_system_id,name,system_class)
+      VALUES ($1,$2,31000003,'Manual system','C4')`, [crypto.randomUUID(), mapId]);
+    const remapped = { ...payload, snapshot: await newerSnapshot(payload.snapshot.fetchedAt),
+      systems: [{ ...payload.systems[0], eveSystemId: 31_000_003 }] };
+
+    const result = await sendTopology(remapped);
+    expect(result.body).toMatchObject({ updatedSystems: 0, conflicts: [
+      { itemId: 'duplicate-remap-member', reason: 'new EVE system identity is already represented by another map system; preserved' },
+    ] });
+    expect((await db.query('SELECT eve_system_id FROM map_systems WHERE map_id=$1 ORDER BY name', [mapId])).rows)
+      .toEqual([{ eve_system_id: 31_000_003 }, { eve_system_id: 31_000_001 }]);
+    expect((await db.query<{ managed_json: Record<string, unknown> }>(
+      `SELECT managed_json FROM wormholesystems_topology_ownership WHERE map_id=$1`, [mapId])).rows[0].managed_json)
+      .toMatchObject({ eveSystemId: 31_000_001 });
+  });
+
   it('denies topology reconciliation and key issuance through a view-only share to a topology-capable role', async () => {
     const recipientId = await seedUser({ characterId: 8_800_000_002, role: 'edit' });
     const recipientOwnerId = (await db.query<{ id: number }>('INSERT INTO owners DEFAULT VALUES RETURNING id')).rows[0].id;
@@ -285,6 +383,94 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
       blocker.release();
     }
     expect((await db.query('SELECT 1 FROM map_systems WHERE map_id=$1', [mapId])).rows).toHaveLength(0);
+  });
+
+  it('serializes saved-route references against topology deletion in either lock order', async () => {
+    const topology = {
+      sourceIdentity, snapshot: freshSnapshot(),
+      systems: [
+        { sourceSystemId: 'route-member-1', eveSystemId: 31_000_001, positionX: 10, positionY: 20 },
+        { sourceSystemId: 'route-member-2', eveSystemId: 31_000_002, positionX: 30, positionY: 40 },
+      ],
+      connections: [{ sourceConnectionId: 'route-edge', fromSourceSystemId: 'route-member-1', toSourceSystemId: 'route-member-2',
+        connection_type: 'standard', ship_size: 'large' }],
+    };
+    expect((await sendTopology(topology)).body).toMatchObject({ createdSystems: 2, createdConnections: 1 });
+    let ids = await db.query<{ id: string }>('SELECT id FROM map_systems WHERE map_id=$1 ORDER BY eve_system_id', [mapId]);
+    let connectionId = (await db.query<{ id: string }>('SELECT id FROM map_connections WHERE map_id=$1', [mapId])).rows[0].id;
+    const routeId = crypto.randomUUID();
+    const createdRoute = await request(mapsApp()).post(`/api/maps/${mapId}/routes`).send({
+      id: routeId, name: 'Reference lifecycle', systemIds: ids.rows.map(row => row.id), connectionIds: [connectionId],
+    });
+    expect(createdRoute.status).toBe(201);
+    const clearRouteRefs = await request(mapsApp()).patch(`/api/maps/${mapId}/routes/${routeId}`).send({ systemIds: [], connectionIds: [] });
+    expect(clearRouteRefs.status).toBe(200);
+
+    // If reconciliation owns the map lock first, a later route write must see
+    // that its endpoints have gone and refuse to persist stale array references.
+    const blocker = await db.connect();
+    let removalSnapshot: ReturnType<typeof freshSnapshot>;
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query('SELECT id FROM maps WHERE id=$1 FOR UPDATE', [mapId]);
+      removalSnapshot = await newerSnapshot(topology.snapshot.fetchedAt);
+      const pendingRemoval = sendTopology({ ...topology, snapshot: removalSnapshot, systems: [], connections: [] });
+      expect(await waitForLockWait('SELECT locked, alliance_id AS "allianceId" FROM maps WHERE id=$1 FOR UPDATE')).toBe(true);
+      await blocker.query('COMMIT');
+      const removed = await pendingRemoval;
+      expect(removed.body).toMatchObject({ deletedSystems: 2, deletedConnections: 1 });
+    } finally {
+      await blocker.query('ROLLBACK');
+      blocker.release();
+    }
+    const staleRoute = await request(mapsApp()).post(`/api/maps/${mapId}/routes`).send({
+      id: crypto.randomUUID(), name: 'Stale after apply', systemIds: ids.rows.map(row => row.id), connectionIds: [connectionId],
+    });
+    expect(staleRoute.status).toBe(400);
+    const staleUpdate = await request(mapsApp()).patch(`/api/maps/${mapId}/routes/${routeId}`).send({
+      systemIds: ids.rows.map(row => row.id), connectionIds: [connectionId],
+    });
+    expect(staleUpdate.status).toBe(400);
+    expect((await db.query<{ system_ids: string[]; connection_ids: string[] }>(
+      'SELECT system_ids,connection_ids FROM map_routes WHERE id=$1', [routeId])).rows[0])
+      .toEqual({ system_ids: [], connection_ids: [] });
+
+    // If a route update queues first, it commits under the same map lock and
+    // reconciliation observes the saved dependency instead of deleting it.
+    const restoredSnapshot = await newerSnapshot(removalSnapshot!.fetchedAt);
+    expect((await sendTopology({ ...topology, snapshot: restoredSnapshot })).body).toMatchObject({ createdSystems: 2, createdConnections: 1 });
+    ids = await db.query<{ id: string }>('SELECT id FROM map_systems WHERE map_id=$1 ORDER BY eve_system_id', [mapId]);
+    connectionId = (await db.query<{ id: string }>('SELECT id FROM map_connections WHERE map_id=$1', [mapId])).rows[0].id;
+    const lockBlocker = await db.connect();
+    try {
+      await lockBlocker.query('BEGIN');
+      await lockBlocker.query('SELECT id FROM maps WHERE id=$1 FOR UPDATE', [mapId]);
+      const pendingRoute = request(mapsApp()).patch(`/api/maps/${mapId}/routes/${routeId}`).send({
+        systemIds: ids.rows.map(row => row.id), connectionIds: [connectionId],
+      });
+      expect(await waitForLockWait('SELECT id FROM maps WHERE id=$1 FOR UPDATE')).toBe(true);
+      const nextRemovalSnapshot = await newerSnapshot(restoredSnapshot.fetchedAt);
+      const pendingRemoval = sendTopology({ ...topology, snapshot: nextRemovalSnapshot, systems: [], connections: [] });
+      expect(await waitForLockWait('SELECT locked, alliance_id AS "allianceId" FROM maps WHERE id=$1 FOR UPDATE')).toBe(true);
+      await lockBlocker.query('COMMIT');
+      const [routeResponse, removalResponse] = await Promise.all([pendingRoute, pendingRemoval]);
+      expect(routeResponse.status).toBe(200);
+      expect(removalResponse.body).toMatchObject({ deletedSystems: 0, deletedConnections: 0 });
+      expect(removalResponse.body.conflicts).toEqual(expect.arrayContaining([
+        expect.objectContaining({ itemId: 'route-edge' }),
+        expect.objectContaining({ itemId: 'route-member-1' }),
+        expect.objectContaining({ itemId: 'route-member-2' }),
+      ]));
+    } finally {
+      await lockBlocker.query('ROLLBACK');
+      lockBlocker.release();
+    }
+    expect((await db.query<{ system_ids: string[]; connection_ids: string[] }>(
+      'SELECT system_ids,connection_ids FROM map_routes WHERE id=$1', [routeId])).rows[0])
+      .toEqual({ system_ids: ids.rows.map(row => row.id), connection_ids: [connectionId] });
+    expect((await db.query('SELECT 1 FROM map_systems WHERE id=ANY($1::uuid[])', [ids.rows.map(row => row.id)])).rows)
+      .toHaveLength(2);
+    expect((await db.query('SELECT 1 FROM map_connections WHERE id=$1', [connectionId])).rows).toHaveLength(1);
   });
 
   it('rejects unknown or stale evidence before mutating topology', async () => {

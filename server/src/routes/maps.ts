@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { PoolClient } from 'pg';
 import { esiFetch } from '../utils/esi.js';
 import { getScoutConnections } from './scout.js';
 
@@ -4060,6 +4061,45 @@ mapsRouter.delete('/:mapId/connections/:connectionId/jumps', async (req, res) =>
 // mutate topology. The step arrays are stored verbatim and validated against the
 // live map when rendered, so a removed hop is flagged rather than re-routed.
 
+async function withMapRowLock<T>(mapId: string, write: (client: PoolClient) => Promise<T>): Promise<{ mapExists: boolean; value?: T }> {
+  const client = await db.connect();
+  let inTransaction = false;
+  try {
+    await client.query('BEGIN');
+    inTransaction = true;
+    const map = await client.query('SELECT id FROM maps WHERE id=$1 FOR UPDATE', [mapId]);
+    if (!map.rows.length) {
+      await client.query('ROLLBACK');
+      inTransaction = false;
+      return { mapExists: false };
+    }
+    const value = await write(client);
+    await client.query('COMMIT');
+    inTransaction = false;
+    return { mapExists: true, value };
+  } catch (error) {
+    if (inTransaction) await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function validRouteIdList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(id => typeof id === 'string' && UUID_RE.test(id));
+}
+
+async function routeReferencesExist(client: PoolClient, mapId: string, systemIds: string[], connectionIds: string[]): Promise<boolean> {
+  const systems = await client.query<{ id: string }>(
+    'SELECT id FROM map_systems WHERE map_id=$1 AND id=ANY($2::uuid[])', [mapId, systemIds]);
+  const foundSystems = new Set(systems.rows.map(row => row.id.toLowerCase()));
+  if (systemIds.some(id => !foundSystems.has(id.toLowerCase()))) return false;
+  const connections = await client.query<{ id: string }>(
+    'SELECT id FROM map_connections WHERE map_id=$1 AND id=ANY($2::uuid[])', [mapId, connectionIds]);
+  const foundConnections = new Set(connections.rows.map(row => row.id.toLowerCase()));
+  return connectionIds.every(id => foundConnections.has(id.toLowerCase()));
+}
+
 const routeSelect =
   `SELECT id, name, system_ids AS "systemIds", connection_ids AS "connectionIds",
           created_at AS "createdAt", updated_at AS "updatedAt"
@@ -4072,22 +4112,28 @@ mapsRouter.post('/:mapId/routes', async (req, res) => {
   const { id, name = '', systemIds = [], connectionIds = [] } = req.body as {
     id?: string; name?: string; systemIds?: string[]; connectionIds?: string[];
   };
-  if (!id || !Array.isArray(systemIds) || systemIds.length < 2) {
+  if (!id || !Array.isArray(systemIds) || systemIds.length < 2 || !validRouteIdList(systemIds) || !validRouteIdList(connectionIds)) {
     res.status(400).json({ error: 'A chain needs an id and at least two systems' });
     return;
   }
   const me = authUser(req);
   // New chains append to the bottom of the list (next sort_order for the map).
-  const ins = await db.query(
-    `INSERT INTO map_routes (id, map_id, name, system_ids, connection_ids, created_by_user_id, sort_order)
-     SELECT $1,$2,$3,$4,$5,$6, COALESCE(MAX(sort_order) + 1, 0) FROM map_routes WHERE map_id = $2
-     ON CONFLICT (id) DO NOTHING`,
-    [id, mapId, name, systemIds, connectionIds ?? [], me.userId],
-  );
+  const write = await withMapRowLock(mapId, async client => {
+    if (!await routeReferencesExist(client, mapId, systemIds, connectionIds)) return { invalidReferences: true, inserted: false };
+    const ins = await client.query(
+      `INSERT INTO map_routes (id, map_id, name, system_ids, connection_ids, created_by_user_id, sort_order)
+       SELECT $1,$2,$3,$4,$5,$6, COALESCE(MAX(sort_order) + 1, 0) FROM map_routes WHERE map_id = $2
+       ON CONFLICT (id) DO NOTHING`,
+      [id, mapId, name, systemIds, connectionIds, me.userId],
+    );
+    return { invalidReferences: false, inserted: (ins.rowCount ?? 0) > 0 };
+  });
+  if (!write.mapExists) { res.status(404).json({ error: 'Map not found' }); return; }
+  if (write.value?.invalidReferences) { res.status(400).json({ error: 'Route systems or connections are not on this map' }); return; }
   await touchMap(mapId);
   // Only a genuinely new row broadcasts — a retried POST hits ON CONFLICT DO
   // NOTHING (rowCount 0), so we don't double-post the same chain to Discord.
-  const inserted = (ins.rowCount ?? 0) > 0;
+  const inserted = write.value?.inserted ?? false;
   db.query(`${routeSelect} WHERE id = $1 AND map_id = $2`, [id, mapId])
     .then(({ rows }) => {
       const route = rows[0] as { name: string; systemIds: string[]; connectionIds: string[] } | undefined;
@@ -4114,10 +4160,29 @@ mapsRouter.patch('/:mapId/routes/:routeId', async (req, res) => {
     if (key in updates) { sets.push(`${col} = $${vals.length + 1}`); vals.push(updates[key]); }
   }
   if (!sets.length) { res.status(400).json({ error: 'Nothing to update' }); return; }
-  await db.query(
-    `UPDATE map_routes SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${vals.length + 1} AND map_id = $${vals.length + 2}`,
-    [...vals, routeId, mapId],
-  );
+  if ('systemIds' in updates && !validRouteIdList(updates.systemIds) ||
+      'connectionIds' in updates && !validRouteIdList(updates.connectionIds)) {
+    res.status(400).json({ error: 'Route systems and connections must be UUID arrays' }); return;
+  }
+  const write = await withMapRowLock(mapId, async client => {
+    if ('systemIds' in updates || 'connectionIds' in updates) {
+      const current = await client.query<{ systemIds: string[]; connectionIds: string[] }>(
+        'SELECT system_ids AS "systemIds", connection_ids AS "connectionIds" FROM map_routes WHERE id=$1 AND map_id=$2 FOR UPDATE',
+        [routeId, mapId]);
+      if (current.rows.length) {
+        const systemIds = 'systemIds' in updates ? updates.systemIds as string[] : current.rows[0].systemIds;
+        const connectionIds = 'connectionIds' in updates ? updates.connectionIds as string[] : current.rows[0].connectionIds;
+        if (!await routeReferencesExist(client, mapId, systemIds, connectionIds)) return false;
+      }
+    }
+    await client.query(
+      `UPDATE map_routes SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${vals.length + 1} AND map_id = $${vals.length + 2}`,
+      [...vals, routeId, mapId],
+    );
+    return true;
+  });
+  if (!write.mapExists) { res.status(404).json({ error: 'Map not found' }); return; }
+  if (write.value === false) { res.status(400).json({ error: 'Route systems or connections are not on this map' }); return; }
   await touchMap(mapId);
   publishToMap(mapId, { type: 'route.update', actor: req.get('x-client-id') ?? null, id: routeId, updates });
   res.json({ ok: true });
@@ -4135,13 +4200,15 @@ mapsRouter.put('/:mapId/routes/order', async (req, res) => {
     res.status(400).json({ error: 'orderedIds must be a non-empty array' });
     return;
   }
-  await db.query(
+  if (!validRouteIdList(orderedIds)) { res.status(400).json({ error: 'orderedIds must be UUIDs' }); return; }
+  const write = await withMapRowLock(mapId, client => client.query(
     `UPDATE map_routes AS r
         SET sort_order = o.ord - 1, updated_at = NOW()
        FROM unnest($1::uuid[]) WITH ORDINALITY AS o(id, ord)
       WHERE r.id = o.id AND r.map_id = $2`,
     [orderedIds, mapId],
-  );
+  ));
+  if (!write.mapExists) { res.status(404).json({ error: 'Map not found' }); return; }
   await touchMap(mapId);
   publishToMap(mapId, { type: 'route.reorder', actor: req.get('x-client-id') ?? null, orderedIds });
   res.json({ ok: true });
@@ -4151,7 +4218,8 @@ mapsRouter.delete('/:mapId/routes/:routeId', async (req, res) => {
   const { mapId, routeId } = req.params;
   const access = await requireMapContentWrite(res, mapId, req);
   if (!access) return;
-  await db.query(`DELETE FROM map_routes WHERE id = $1 AND map_id = $2`, [routeId, mapId]);
+  const write = await withMapRowLock(mapId, client => client.query(`DELETE FROM map_routes WHERE id = $1 AND map_id = $2`, [routeId, mapId]));
+  if (!write.mapExists) { res.status(404).json({ error: 'Map not found' }); return; }
   await touchMap(mapId);
   publishToMap(mapId, { type: 'route.remove', actor: req.get('x-client-id') ?? null, id: routeId });
   res.json({ ok: true });
