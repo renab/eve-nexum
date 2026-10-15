@@ -47,18 +47,18 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     return server;
   }
 
-  async function waitForLockWait(queryFragment: string, blockingPid: number): Promise<boolean> {
+  async function waitForLockWait(queryFragment: string, blockingPid: number): Promise<number | null> {
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
-      const waiting = await db.query<{ waiting: boolean }>(`SELECT EXISTS (
-        SELECT 1 FROM pg_stat_activity AS activity
-         WHERE activity.wait_event_type='Lock' AND activity.query LIKE $1
-           AND $2::integer = ANY(pg_blocking_pids(activity.pid))
-      ) AS waiting`, [`%${queryFragment}%`, blockingPid]);
-      if (waiting.rows[0].waiting) return true;
+      const waiting = await db.query<{ pid: number }>(`SELECT activity.pid
+        FROM pg_stat_activity AS activity
+       WHERE activity.wait_event_type='Lock' AND activity.query LIKE $1
+         AND $2::integer = ANY(pg_blocking_pids(activity.pid))
+       ORDER BY activity.query_start DESC LIMIT 1`, [`%${queryFragment}%`, blockingPid]);
+      if (waiting.rows.length) return waiting.rows[0].pid;
       await new Promise(resolve => setTimeout(resolve, 10));
     }
-    return false;
+    return null;
   }
 
   function keysApp(sessionUserId: number, ownerId: number) {
@@ -419,7 +419,7 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
       const blockerPid = (await blocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0].pid;
       removalSnapshot = await newerSnapshot(topology.snapshot.fetchedAt);
       const pendingRemoval = sendTopology({ ...topology, snapshot: removalSnapshot, systems: [], connections: [] });
-      expect(await waitForLockWait('SELECT locked, alliance_id AS "allianceId" FROM maps WHERE id=$1 FOR UPDATE', blockerPid)).toBe(true);
+      expect(await waitForLockWait('SELECT locked, alliance_id AS "allianceId" FROM maps WHERE id=$1 FOR UPDATE', blockerPid)).not.toBeNull();
       await blocker.query('COMMIT');
       const removed = await pendingRemoval;
       expect(removed.body).toMatchObject({ deletedSystems: 2, deletedConnections: 1 });
@@ -446,18 +446,43 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     ids = await db.query<{ id: string }>('SELECT id FROM map_systems WHERE map_id=$1 ORDER BY eve_system_id', [mapId]);
     connectionId = (await db.query<{ id: string }>('SELECT id FROM map_connections WHERE map_id=$1', [mapId])).rows[0].id;
     const lockBlocker = await db.connect();
+    const barrierId = crypto.randomUUID().replaceAll('-', '');
+    const barrierKey = Number.parseInt(barrierId.slice(0, 13), 16);
+    const barrierFunction = `route_write_barrier_${barrierId}`;
+    const barrierTrigger = `${barrierFunction}_trigger`;
+    let barrierFunctionInstalled = false;
+    let barrierTriggerInstalled = false;
+    const pendingRequests: Promise<unknown>[] = [];
     try {
       await lockBlocker.query('BEGIN');
-      await lockBlocker.query('SELECT id FROM maps WHERE id=$1 FOR UPDATE', [mapId]);
-      const blockerPid = (await lockBlocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0].pid;
-      // Supertest's Test is lazy; attach a handler now so the route query starts before probing pg_stat_activity.
+      await lockBlocker.query('SELECT pg_advisory_xact_lock($1)', [barrierKey]);
+      await db.query(`CREATE FUNCTION ${barrierFunction}() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          PERFORM pg_advisory_xact_lock(${barrierKey});
+          RETURN NEW;
+        END
+      $$`);
+      barrierFunctionInstalled = true;
+      await db.query(`CREATE TRIGGER ${barrierTrigger} BEFORE UPDATE ON map_routes
+        FOR EACH ROW WHEN (NEW.map_id = '${mapId}'::uuid)
+        EXECUTE FUNCTION ${barrierFunction}()`);
+      barrierTriggerInstalled = true;
+
+      const barrierPid = (await lockBlocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+      // The trigger pauses the endpoint after withMapRowLock has acquired the map row lock.
       const pendingRoute = request(mapsApp()).patch(`/api/maps/${mapId}/routes/${routeId}`).send({
         systemIds: ids.rows.map(row => row.id), connectionIds: [connectionId],
       }).then(response => response);
-      expect(await waitForLockWait('SELECT id FROM maps WHERE id=$1 FOR UPDATE', blockerPid)).toBe(true);
+      pendingRequests.push(pendingRoute);
+      const routeBackendPid = await waitForLockWait('UPDATE map_routes SET', barrierPid);
+      expect(routeBackendPid).not.toBeNull();
+
       const nextRemovalSnapshot = await newerSnapshot(restoredSnapshot.fetchedAt);
       const pendingRemoval = sendTopology({ ...topology, snapshot: nextRemovalSnapshot, systems: [], connections: [] });
-      expect(await waitForLockWait('SELECT locked, alliance_id AS "allianceId" FROM maps WHERE id=$1 FOR UPDATE', blockerPid)).toBe(true);
+      pendingRequests.push(pendingRemoval);
+      // Identify the route handler's backend as the blocker: this proves it really
+      // owns the map row lock before reconciliation queues behind it.
+      expect(await waitForLockWait('SELECT locked, alliance_id AS "allianceId" FROM maps WHERE id=$1 FOR UPDATE', routeBackendPid!)).not.toBeNull();
       await lockBlocker.query('COMMIT');
       const [routeResponse, removalResponse] = await Promise.all([pendingRoute, pendingRemoval]);
       expect(routeResponse.status).toBe(200);
@@ -469,6 +494,13 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
       ]));
     } finally {
       await lockBlocker.query('ROLLBACK');
+      await Promise.allSettled(pendingRequests);
+      if (barrierTriggerInstalled) {
+        await db.query(`DROP TRIGGER IF EXISTS ${barrierTrigger} ON map_routes`);
+      }
+      if (barrierFunctionInstalled) {
+        await db.query(`DROP FUNCTION IF EXISTS ${barrierFunction}()`);
+      }
       lockBlocker.release();
     }
     expect((await db.query<{ system_ids: string[]; connection_ids: string[] }>(
