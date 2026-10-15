@@ -39,7 +39,7 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     server.use(express.json());
     server.use((req, _res, next) => {
       (req as unknown as { session: Record<string, unknown> }).session = {
-        userId, characterId: 8_800_000_001, role: 'admin', userCorpId: null, userAllianceId: null,
+        userId, characterId: 880_000_001, role: 'admin', userCorpId: null, userAllianceId: null,
       };
       next();
     });
@@ -47,13 +47,16 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     return server;
   }
 
-  async function waitForLockWait(queryFragment: string): Promise<boolean> {
-    for (let attempt = 0; attempt < 100; attempt++) {
+  async function waitForLockWait(queryFragment: string, blockingPid: number): Promise<boolean> {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
       const waiting = await db.query<{ waiting: boolean }>(`SELECT EXISTS (
-        SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE $1
-      ) AS waiting`, [`%${queryFragment}%`]);
+        SELECT 1 FROM pg_stat_activity AS activity
+         WHERE activity.wait_event_type='Lock' AND activity.query LIKE $1
+           AND $2::integer = ANY(pg_blocking_pids(activity.pid))
+      ) AS waiting`, [`%${queryFragment}%`, blockingPid]);
       if (waiting.rows[0].waiting) return true;
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await new Promise(resolve => setTimeout(resolve, 10));
     }
     return false;
   }
@@ -76,7 +79,7 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
 
   beforeEach(async () => {
     await truncateAll();
-    userId = await seedUser({ characterId: 8_800_000_001, role: 'admin' });
+    userId = await seedUser({ characterId: 880_000_001, role: 'admin' });
     const ownerId = (await db.query<{ id: number }>('INSERT INTO owners DEFAULT VALUES RETURNING id')).rows[0].id;
     await db.query('UPDATE users SET owner_id=$1 WHERE id=$2', [ownerId, userId]);
     mapId = (await db.query<{ id: string }>('INSERT INTO maps (user_id,owner_id,name) VALUES ($1,$2,$3) RETURNING id', [userId, ownerId, 'Target'])).rows[0].id;
@@ -256,15 +259,15 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     expect(result.body).toMatchObject({ updatedSystems: 0, conflicts: [
       { itemId: 'duplicate-remap-member', reason: 'new EVE system identity is already represented by another map system; preserved' },
     ] });
-    expect((await db.query('SELECT eve_system_id FROM map_systems WHERE map_id=$1 ORDER BY name', [mapId])).rows)
-      .toEqual([{ eve_system_id: 31_000_003 }, { eve_system_id: 31_000_001 }]);
+    expect((await db.query('SELECT eve_system_id FROM map_systems WHERE map_id=$1 ORDER BY eve_system_id', [mapId])).rows)
+      .toEqual([{ eve_system_id: 31_000_001 }, { eve_system_id: 31_000_003 }]);
     expect((await db.query<{ managed_json: Record<string, unknown> }>(
       `SELECT managed_json FROM wormholesystems_topology_ownership WHERE map_id=$1`, [mapId])).rows[0].managed_json)
       .toMatchObject({ eveSystemId: 31_000_001 });
   });
 
   it('denies topology reconciliation and key issuance through a view-only share to a topology-capable role', async () => {
-    const recipientId = await seedUser({ characterId: 8_800_000_002, role: 'edit' });
+    const recipientId = await seedUser({ characterId: 880_000_002, role: 'edit' });
     const recipientOwnerId = (await db.query<{ id: number }>('INSERT INTO owners DEFAULT VALUES RETURNING id')).rows[0].id;
     await db.query('UPDATE users SET owner_id=$1 WHERE id=$2', [recipientOwnerId, recipientId]);
     const recipientCharacterId = (await db.query<{ character_id: number }>('SELECT character_id FROM users WHERE id=$1', [recipientId])).rows[0].character_id;
@@ -413,9 +416,10 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     try {
       await blocker.query('BEGIN');
       await blocker.query('SELECT id FROM maps WHERE id=$1 FOR UPDATE', [mapId]);
+      const blockerPid = (await blocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0].pid;
       removalSnapshot = await newerSnapshot(topology.snapshot.fetchedAt);
       const pendingRemoval = sendTopology({ ...topology, snapshot: removalSnapshot, systems: [], connections: [] });
-      expect(await waitForLockWait('SELECT locked, alliance_id AS "allianceId" FROM maps WHERE id=$1 FOR UPDATE')).toBe(true);
+      expect(await waitForLockWait('SELECT locked, alliance_id AS "allianceId" FROM maps WHERE id=$1 FOR UPDATE', blockerPid)).toBe(true);
       await blocker.query('COMMIT');
       const removed = await pendingRemoval;
       expect(removed.body).toMatchObject({ deletedSystems: 2, deletedConnections: 1 });
@@ -445,13 +449,15 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     try {
       await lockBlocker.query('BEGIN');
       await lockBlocker.query('SELECT id FROM maps WHERE id=$1 FOR UPDATE', [mapId]);
+      const blockerPid = (await lockBlocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+      // Supertest's Test is lazy; attach a handler now so the route query starts before probing pg_stat_activity.
       const pendingRoute = request(mapsApp()).patch(`/api/maps/${mapId}/routes/${routeId}`).send({
         systemIds: ids.rows.map(row => row.id), connectionIds: [connectionId],
-      });
-      expect(await waitForLockWait('SELECT id FROM maps WHERE id=$1 FOR UPDATE')).toBe(true);
+      }).then(response => response);
+      expect(await waitForLockWait('SELECT id FROM maps WHERE id=$1 FOR UPDATE', blockerPid)).toBe(true);
       const nextRemovalSnapshot = await newerSnapshot(restoredSnapshot.fetchedAt);
       const pendingRemoval = sendTopology({ ...topology, snapshot: nextRemovalSnapshot, systems: [], connections: [] });
-      expect(await waitForLockWait('SELECT locked, alliance_id AS "allianceId" FROM maps WHERE id=$1 FOR UPDATE')).toBe(true);
+      expect(await waitForLockWait('SELECT locked, alliance_id AS "allianceId" FROM maps WHERE id=$1 FOR UPDATE', blockerPid)).toBe(true);
       await lockBlocker.query('COMMIT');
       const [routeResponse, removalResponse] = await Promise.all([pendingRoute, pendingRemoval]);
       expect(routeResponse.status).toBe(200);
@@ -471,7 +477,7 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     expect((await db.query('SELECT 1 FROM map_systems WHERE id=ANY($1::uuid[])', [ids.rows.map(row => row.id)])).rows)
       .toHaveLength(2);
     expect((await db.query('SELECT 1 FROM map_connections WHERE id=$1', [connectionId])).rows).toHaveLength(1);
-  });
+  }, 15_000);
 
   it('rejects unknown or stale evidence before mutating topology', async () => {
     const invalid = { sourceIdentity, snapshot: freshSnapshot(false), systems: [], connections: [] };

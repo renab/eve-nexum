@@ -202,7 +202,8 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
         }
         const nextManaged = { sourceSystemId: system.sourceSystemId, eveSystemId: system.eveSystemId, positionX: system.positionX,
           positionY: system.positionY, name: sdeRow.name, systemClass: sdeRow.systemClass };
-        if (Number(row.eve_system_id) !== system.eveSystemId || system.positionX !== Number(row.position_x) || system.positionY !== Number(row.position_y) || sdeRow.name !== row.name || sdeRow.systemClass !== row.system_class) {
+        if (Number(row.eve_system_id) !== system.eveSystemId || system.positionX !== Math.fround(Number(row.position_x)) ||
+          system.positionY !== Math.fround(Number(row.position_y)) || sdeRow.name !== row.name || sdeRow.systemClass !== row.system_class) {
           await client.query(`UPDATE map_systems SET eve_system_id=$1, position_x=$2, position_y=$3, name=$4, system_class=$5 WHERE id=$6 AND map_id=$7`,
             [system.eveSystemId, system.positionX, system.positionY, sdeRow.name, sdeRow.systemClass, owned.row_id, mapId]);
           result.updatedSystems++;
