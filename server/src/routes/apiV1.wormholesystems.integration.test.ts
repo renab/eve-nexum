@@ -302,8 +302,27 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
       connections: [{ sourceConnectionId: 'fraction-edge', fromSourceSystemId: 'fraction-1', toSourceSystemId: 'fraction-2',
         connection_type: 'standard', ship_size: 'large' }],
     };
-    expect((await sendTopology(payload)).body.createdSystems).toBe(2);
-    expect((await sendTopology(payload)).body).toMatchObject({ updatedSystems: 0, updatedConnections: 0, createdSystems: 0 });
+    const created = await sendTopology(payload);
+    expect(created.body).toMatchObject({ createdSystems: 2, createdConnections: 1, updatedSystems: 0, updatedConnections: 0,
+      checkpoint: { accepted: true, replayed: false, partial: false } });
+    const beforeReplaySystems = await db.query('SELECT * FROM map_systems WHERE map_id=$1 ORDER BY id', [mapId]);
+    const beforeReplayConnections = await db.query('SELECT * FROM map_connections WHERE map_id=$1 ORDER BY id', [mapId]);
+    const beforeReplayOwnership = await db.query(`SELECT * FROM wormholesystems_topology_ownership
+      WHERE map_id=$1 ORDER BY item_kind,source_item_id`, [mapId]);
+    const beforeReplayCheckpoint = await db.query(`SELECT * FROM wormholesystems_topology_checkpoints
+      WHERE map_id=$1 AND source_identity=$2`, [mapId, sourceIdentity]);
+
+    const replay = await sendTopology(payload);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toMatchObject({ createdSystems: 2, createdConnections: 1, updatedSystems: 0, updatedConnections: 0,
+      checkpoint: { accepted: true, replayed: true, partial: false } });
+    expect((await db.query('SELECT * FROM map_systems WHERE map_id=$1 ORDER BY id', [mapId])).rows).toEqual(beforeReplaySystems.rows);
+    expect((await db.query('SELECT * FROM map_connections WHERE map_id=$1 ORDER BY id', [mapId])).rows)
+      .toEqual(beforeReplayConnections.rows);
+    expect((await db.query(`SELECT * FROM wormholesystems_topology_ownership
+      WHERE map_id=$1 ORDER BY item_kind,source_item_id`, [mapId])).rows).toEqual(beforeReplayOwnership.rows);
+    expect((await db.query(`SELECT * FROM wormholesystems_topology_checkpoints
+      WHERE map_id=$1 AND source_identity=$2`, [mapId, sourceIdentity])).rows).toEqual(beforeReplayCheckpoint.rows);
 
     const moved = structuredClone(payload);
     (moved.systems[0] as any).positionX = 11.1;
@@ -867,20 +886,23 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
 
     const result = await sendTopology(next);
     expect(result.status).toBe(200);
+    const connectionRows = await db.query<{ source_item_id: string; row_id: string; source_signature_id: string | null; target_signature_id: string | null }>(
+      `SELECT o.source_item_id,o.row_id::text AS row_id,c.source_signature_id,c.target_signature_id FROM map_connections c
+        JOIN wormholesystems_topology_ownership o ON o.map_id=c.map_id AND o.item_kind='connection' AND o.row_id=c.id
+       WHERE c.map_id=$1 ORDER BY o.source_item_id`, [mapId]);
     expect(result.body).toMatchObject({ updatedConnections: 1, createdConnections: 1, checkpoint: { partial: true },
       mappings: { connections: expect.arrayContaining([
-        { sourceId: 'edge-one', ownership: 'owned' }, { sourceId: 'edge-two', ownership: 'owned' },
+        { sourceId: 'edge-one', rowId: connectionRows.rows[0].row_id, ownership: 'owned' },
+        { sourceId: 'edge-two', rowId: connectionRows.rows[1].row_id, ownership: 'owned' },
       ]) } });
     expect(result.body.conflicts).toEqual(expect.arrayContaining([
       expect.objectContaining({ itemId: 'edge-one', reason: expect.stringContaining('signature is unresolved') }),
       expect.objectContaining({ itemId: 'edge-two', reason: expect.stringContaining('signature is unresolved') }),
     ]));
-    expect((await db.query<{ source_item_id: string; source_signature_id: string | null; target_signature_id: string | null }>(
-      `SELECT o.source_item_id,c.source_signature_id,c.target_signature_id FROM map_connections c
-        JOIN wormholesystems_topology_ownership o ON o.map_id=c.map_id AND o.item_kind='connection' AND o.row_id=c.id
-       WHERE c.map_id=$1 ORDER BY o.source_item_id`, [mapId])).rows)
-      .toEqual([{ source_item_id: 'edge-one', source_signature_id: null, target_signature_id: null },
-        { source_item_id: 'edge-two', source_signature_id: null, target_signature_id: null }]);
+    expect(connectionRows.rows).toEqual([
+      { source_item_id: 'edge-one', row_id: connectionRows.rows[0].row_id, source_signature_id: null, target_signature_id: null },
+      { source_item_id: 'edge-two', row_id: connectionRows.rows[1].row_id, source_signature_id: null, target_signature_id: null },
+    ]);
   });
 
   it('uses database defaults only for absent positions and sizes, preserving existing values', async () => {
@@ -1016,7 +1038,7 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
       expect.objectContaining({ itemId: 'annotated-signature', reason: 'removed source signature has manual data, changed fields, or connection references; preserved' }),
       expect.objectContaining({ itemId: 'referenced-signature', reason: 'removed source signature has manual data, changed fields, or connection references; preserved' }),
     ]) });
-    expect((await db.query<{ sig_id: string; notes: string }>(`SELECT sig_id,notes FROM map_signatures s
+    expect((await db.query<{ sig_id: string; notes: string }>(`SELECT s.sig_id,s.notes FROM map_signatures s
       JOIN map_systems m ON m.id=s.system_id WHERE m.map_id=$1 ORDER BY s.sig_id`, [mapId])).rows)
       .toEqual([{ sig_id: 'DEF-456', notes: 'manual' }, { sig_id: 'GHI-789', notes: '' }]);
     expect((await db.query<{ source_signature_id: string }>(`SELECT source_signature_id FROM map_connections WHERE map_id=$1`, [mapId])).rows)
