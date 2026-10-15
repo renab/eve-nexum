@@ -34,6 +34,7 @@ import {
   createStructure, updateStructure, deleteStructure,
 } from '../services/mapWrite.js';
 import { reportPresence, removePresence } from '../services/presence.js';
+import { withMapRowLock as withTopologyMapRowLock } from '../services/mapRowLock.js';
 import { copyMap } from '../services/mapCopy.js';
 import { notifyDiscord, k162Embed, connectionEmbed, chainEmbed, kspaceExitEmbed } from '../services/discord.js';
 import { shortestRoutes } from '../services/routeGraph.js';
@@ -3262,7 +3263,7 @@ mapsRouter.post('/:mapId/connections', async (req, res) => {
     // but not when it is copied from eve-scout, which knows the code up front.
     // Patching it afterwards is not an option: this POST is deferred until
     // both endpoints exist, so a follow-up PATCH can overtake it and be lost.
-    const ins = await db.query(
+    const ins = await withTopologyMapRowLock(mapId, client => client.query(
       `INSERT INTO map_connections
          (id, map_id, source_id, target_id, source_handle, target_handle,
           connection_type, mass_status, time_status, size, wh_type, scout_connection_id)
@@ -3272,7 +3273,7 @@ mapsRouter.post('/:mapId/connections', async (req, res) => {
        effectiveType, massStatus ?? null, timeStatus ?? null, size ?? 'large',
        typeof type === 'string' && type.trim() ? type.trim().toUpperCase() : null,
        typeof scoutConnectionId === 'string' && scoutConnectionId ? scoutConnectionId : null],
-    );
+    ));
     inserted = ins.rowCount ?? 0;
   } catch (err) {
     // FK violation = one of the endpoint systems doesn't exist on the
@@ -3936,10 +3937,10 @@ mapsRouter.patch('/:mapId/connections/:connectionId', async (req, res) => {
 
   if (!sets.length) { res.status(400).json({ error: 'Nothing to update' }); return; }
 
-  await db.query(
+  await withTopologyMapRowLock(mapId, client => client.query(
     `UPDATE map_connections SET ${sets.join(', ')} WHERE id = $${vals.length + 1} AND map_id = $${vals.length + 2}`,
     [...vals, connectionId, mapId],
-  );
+  ).then(() => undefined));
   await touchMap(mapId);
   publishToMap(mapId, { type: 'connection.update', actor: req.get('x-client-id') ?? null, id: connectionId, updates });
   // A wormhole type was just filled in — e.g. sig auto-detect labelling a
@@ -3955,7 +3956,9 @@ mapsRouter.delete('/:mapId/connections/:connectionId', async (req, res) => {
   const { mapId, connectionId } = req.params;
   const access = await requireMapWrite(res, mapId, req);
   if (!access) return;
-  await db.query(`DELETE FROM map_connections WHERE id = $1 AND map_id = $2`, [connectionId, mapId]);
+  await withTopologyMapRowLock(mapId, client => client.query(
+    `DELETE FROM map_connections WHERE id = $1 AND map_id = $2`, [connectionId, mapId],
+  ).then(() => undefined));
   await touchMap(mapId);
   publishToMap(mapId, { type: 'connection.remove', actor: req.get('x-client-id') ?? null, id: connectionId });
   res.json({ ok: true });

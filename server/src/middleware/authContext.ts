@@ -47,6 +47,8 @@ export interface AuthUser {
   apiScope?:     ApiScope;
   /** Present for map-bound WormholeSystems integration keys. */
   apiScopeMapId?: string | null;
+  /** Database identity used to revalidate API-key scope inside write transactions. */
+  apiTokenId?:   string;
 }
 
 // Existing keys retain their linear hierarchy; the integration scope is a
