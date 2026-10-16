@@ -125,7 +125,7 @@ Open <http://localhost> and click **Log in with EVE Online**. That's it.
 - **Cross-map sync** — opt-in (Map Controls → *Sync system data across my maps*). When the same EVE system appears on several of your maps, adding or editing its signatures and anomalies on one map copies them to the same system on your others — personal maps sync with your other personal maps, corp maps with the corp's other maps. Non-destructive: missing entries are inserted and blank fields filled, but data you've already entered is never overwritten and nothing is ever deleted (deletes and overwrite-paste removals stay local). Matches by EVE system id, so custom systems are skipped.
 - **Map locking** — admins can freeze a corp map's topology. Systems, connections, and the map name lock for non-admins, but signatures, structures, and per-system notes stay editable so ops can continue while the layout is pinned. The toolbar shows an amber 🔒 chip while the lock is active, and passive location tracking won't auto-add new systems on a locked map.
 - **Role-based access** — `admin` / `full` / `edit` / `readonly`. Roles only restrict corp-map actions; every user owns their personal maps regardless of role. See [Roles](#roles) for the full matrix.
-- **External API** — generate a long-lived API key (🔑 in the toolbar) to read and drive your maps from your own tools and scripts: read maps, subscribe to a live event stream, and (with a write key) push signatures/anomalies/structures. Account-scoped, acts as a chosen character, role-gated, topology stays human-only, revocable. See [External API](#external-api).
+- **External API** — generate a long-lived API key (🔑 in the toolbar) to read and drive your maps from your own tools and scripts: read maps, subscribe to a live event stream, and (with a write key) push signatures/anomalies/structures. A dedicated map-bound WormholeSystems key can reconcile only source-owned systems and connections on its selected map. Account-scoped, acts as a chosen character, role-gated, revocable. See [External API](#external-api).
 
 ### System intelligence
 
@@ -168,7 +168,7 @@ Open <http://localhost> and click **Log in with EVE Online**. That's it.
 - **Demo map** — the landing page mounts a non-editable demo map so visitors can see what the tool does before logging in.
 - **Collapsible sidebar** — Map Options, Connections, Proximity Alerts, Stale System Fade, and Shortcuts each expand or collapse independently. Per-section open/closed state persists per browser via `localStorage`.
 - **European date format** — DD-MM-YYYY everywhere a date is displayed (chart axes, relative-time fallbacks for events older than a month). ISO timestamps are still used in CSV exports for spreadsheet sortability.
-- **Multi-lingual** — the entire UI is translated into nine languages: English, Deutsch, Français, Español, Português, 简体中文, 한국어, 日本語, and Русский. The language is auto-detected from the browser (regional locales like `es-MX` or `en-GB` map to the base language) and can be changed any time from the in-app language switcher; the choice persists per browser. The public landing and comparison pages are localised too.
+- **Multi-lingual** — the entire UI is translated into ten languages: English, Deutsch, Nederlands, Français, Español, Português, 简体中文, 한국어, 日本語, and Русский. The language is auto-detected from the browser (regional locales like `es-MX` or `en-GB` map to the base language) and can be changed any time from the in-app language switcher; the choice persists per browser. The public landing and comparison pages are localised too.
 
 ### For corporations & alliances
 
@@ -247,8 +247,9 @@ Read **and drive** your maps programmatically — pull the live chain into a fle
 | **Read only** | Read maps, systems, signatures, anomalies, structures |
 | **Read + live events** | …plus subscribe to the live event stream |
 | **Read + write content** | …plus add / edit / delete signatures, anomalies, and structures |
+| **WormholeSystems sync (map-bound)** | All of the above, plus reconcile source-owned topology on one selected map only |
 
-Writes are limited to **per-system content**. Map **topology** (adding/moving systems, drawing connections, rename, lock) is deliberately human-only — no key can change it.
+Ordinary keys can write only **per-system content**. The map-bound WormholeSystems scope is not generic topology CRUD: it adds one source reconciliation endpoint, preserves unmatched/manual rows and deletes only rows with matching integration ownership records. Browser topology routes remain human-only. Key creation requires a map the bound character can edit and shows the map binding in the key list.
 
 **Authenticate.** Send the key as a Bearer token:
 
@@ -274,6 +275,7 @@ curl -H "Authorization: Bearer nxm_…" https://yourdomain.com/api/v1/maps
 | `POST/PATCH/DELETE /api/v1/maps/:mapId/systems/:systemId/signatures[/:sigId]` | Add / edit / remove a signature |
 | `POST/PATCH/DELETE /api/v1/maps/:mapId/systems/:systemId/anomalies[/:anomId]` | Add / edit / remove an anomaly |
 | `POST/PATCH/DELETE /api/v1/maps/:mapId/systems/:systemId/structures[/:structureId]` | Add / edit / remove a structure |
+| `PUT /api/v1/maps/:mapId/wormholesystems/topology` | Reconcile source-identified systems and connections; requires the WormholeSystems scope bound to `:mapId` |
 
 Writes go through the exact same path as the app — so they fan out over the [event stream](#live-event-stream), trigger the inbound-K162 Discord notice, and cross-map sync just like a human edit.
 
@@ -298,7 +300,7 @@ Each `data:` line is a JSON object with a `type` and a type-specific payload. Th
 
 > Single-process delivery: the stream is served in-memory by one instance, the same as the in-app live sync. A multi-replica deployment would need the documented Postgres `LISTEN/NOTIFY` swap — see the realtime-sync notes.
 
-**Scope and safety.** Keys are **account-scoped** — a key can do everything its account can within its scope, so treat it as a secret. Writes are capped at per-system content (never topology) and are still gated by the bound character's role, so a key acting as a `readonly` corp member can't write a corp map. Keys can be given an expiry, record a *last used* time so you can spot a stale or leaked key, and are one-click revocable. Share-link tokens are never returned through the API.
+**Scope and safety.** Keys are **account-scoped** — a key can do everything its account can within its scope, so treat it as a secret. The WormholeSystems key is limited to one selected map, and its topology endpoint does not accept labels, notes, bookmarks, or arbitrary patch fields. Writes remain gated by the bound character's role and map lock. Keys can be given an expiry, record a *last used* time so you can spot a stale or leaked key, and are one-click revocable. Share-link tokens are never returned through the API.
 
 ---
 
@@ -329,10 +331,11 @@ Edit `.env` and fill in the required values:
 | `EVE_CALLBACK_URL` | Yes | Must match the callback registered in your EVE app — e.g. `https://yourdomain.com/auth/callback` |
 | `FRONTEND_URL` | Yes | Public URL of the app — e.g. `https://yourdomain.com` |
 | `DOMAIN` | Traefik only | Bare hostname for the Traefik router rule — e.g. `nexum.yourdomain.com` |
+| `TRUST_PROXY` | When proxied | How many reverse proxies sit in front of the app. Express uses it to pick the client's address out of `X-Forwarded-For`, and the per-IP rate limits are bucketed on that address — **set it too low and every request looks like it came from your proxy, so a single shared bucket rate-limits your whole instance**. `1` (default) for the plain compose (nginx → server); **`2` when running behind Traefik** (Traefik → nginx → server); add one for each further proxy, e.g. `3` behind Cloudflare as well. |
 | `CORP_ID` | Optional | Restricts logins to specific EVE corporations. **Comma-separated list** of corporation IDs — anyone whose corp is not admitted is rejected at the OAuth callback (unless their alliance is in `ALLIANCE_ID`). Leave empty/unset to allow any EVE character to log in. Example single corp: `98000001`. Example multi-corp: `98000001,98000002`. **On boot this list _seeds_ the login allow-list** (see [Admitting friends without editing `.env`](#admitting-friends-without-editing-env)): the env-seeded entries are the immutable "core" — additional corps, alliances, or individual characters are admitted live from the admin area without editing `.env` or restarting. Removing a corp from `CORP_ID` removes its core entry on the next boot. |
 | `ALLIANCE_ID` | Optional | Restricts logins to specific EVE alliances, and adds the **alliance map** scope. **Comma-separated list** of alliance IDs. A character is admitted if their corp is in `CORP_ID` **or** their alliance is in `ALLIANCE_ID`, so a whole alliance can be permitted without listing every member corp. Like `CORP_ID`, this seeds the immutable core of the login allow-list. The list also forms the coalition for `ALLIANCE_MAP_SHARED`. Example: `99000001` or `99000001,99000002`. |
 | `ADMIN_CHAR_ID` | When `CORP_ID` or `ALLIANCE_ID` is set | EVE character ID of the bootstrap admin. Forced to the top role on first login (`alliance_admin` when `ALLIANCE_ID` is set, otherwise `admin`) and cannot be demoted or blocked by other admins. **Not a membership exemption** — this character still has to be in a listed corp or alliance to log in. See [What happens when a user leaves the corp](#what-happens-when-a-user-leaves-the-corp). |
-| `DEFAULT_USER_ROLE` | Optional | Role **new** users are created with on a corp/alliance instance. Default `readonly` (an admin then promotes them). Set to `edit` to let every admitted member edit maps as soon as they log in (`full` is the tier just above `edit`). Existing users keep their current role. Limited to the editing tiers — `admin` / `alliance_admin` can never be granted by default and must be assigned per-user; any other value falls back to `readonly`. |
+| `DEFAULT_USER_ROLE` | Optional | Role **new** users are created with on a corp/alliance instance. Default `readonly` (an admin then promotes them). Accepted, least to most privileged: `readonly`, `contributor` (log signatures, anomalies and structures but not reshape the map), `edit`, `full`. Existing users keep their current role. `admin` / `alliance_admin` can never be granted by default and must be assigned per-user; any other value falls back to `readonly`, with a warning logged at boot naming the rejected value. |
 | `CORP_MAP_SHARED` | Optional | `1` / `true` to share every corp map across every listed corp. Default (`false`) scopes corp maps to the corp that created them — Corp A's chain stays invisible to Corp B even when they share a deployment. Only enable when all listed corps explicitly trust each other. |
 | `ALLIANCE_MAP_SHARED` | Optional | Alliance counterpart of `CORP_MAP_SHARED`. `1` / `true` makes every alliance map visible to every listed alliance (coalition mode). Default (`false`) scopes each alliance map to its owning alliance. |
 | `CORP_MAP_TIME` | Optional | Grace period (days) for the map-cleanup sweeps, which run hourly in restricted mode. **Corp/alliance maps** are deleted once untouched for this long. **Personal maps** are deleted only when their owning account can no longer log in (left every admitted corp/alliance, dropped below the standings threshold, or was blocked) *and* the map has been untouched this long — an active member's idle personal maps are never removed. Default `30`. |
@@ -569,6 +572,13 @@ To front the stack with Traefik for TLS and a public URL, add `DOMAIN=nexum.your
 docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d
 ```
 Traefik will handle TLS termination and HTTP→HTTPS redirects. The `docker-compose.traefik.yml` overlay assumes a Traefik network named `traefik-public` and a cert resolver named `letsencrypt`.
+
+> **Set `TRUST_PROXY=2` when you add Traefik.** It puts a second proxy in front
+> of the app (Traefik → nginx → server), and the server has to be told, because
+> the count decides which `X-Forwarded-For` entry is read as the client. Leave it
+> at the default of `1` and every request resolves to Traefik's own address —
+> so instead of a rate limit per user you get one bucket shared by everyone on
+> the instance, and a busy evening starts returning `429` to all of them.
 
 > **Tip — avoid retyping the overlay.** Every `docker compose ...` command below uses the standard form. If you run with the Traefik overlay, either prefix each command with `-f docker-compose.yml -f docker-compose.traefik.yml`, or set it once per shell session:
 > ```bash

@@ -1,5 +1,14 @@
 import { Router } from 'express';
+import type { PoolClient } from 'pg';
 import { esiFetch } from '../utils/esi.js';
+import { getScoutConnections } from './scout.js';
+
+// How long a hole must have been missing from the eve-scout feed before the
+// copy button's cleanup will remove the rows it wrote for it. The feed lists a
+// hole until somebody reports it collapsed, so absence is usually real -- but a
+// single stale or partial read would otherwise delete live holes out of a
+// chain, and carrying a dead hole for an hour is much cheaper than that.
+const SCOUT_GRACE_MINUTES = 60;
 import type { Request, Response } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../middleware/requireAuth.js';
@@ -25,6 +34,7 @@ import {
   createStructure, updateStructure, deleteStructure,
 } from '../services/mapWrite.js';
 import { reportPresence, removePresence } from '../services/presence.js';
+import { withMapRowLock as withTopologyMapRowLock } from '../services/mapRowLock.js';
 import { copyMap } from '../services/mapCopy.js';
 import { notifyDiscord, k162Embed, connectionEmbed, chainEmbed, kspaceExitEmbed } from '../services/discord.js';
 import { shortestRoutes } from '../services/routeGraph.js';
@@ -242,10 +252,11 @@ export async function requireMapContentWrite(res: Response, mapId: string, req: 
   if (!access) { res.status(404).json({ error: 'Map not found' }); return null; }
 
   const acting = authUser(req);
-  // API-key writes need the 'write' scope; a 'read'/'events' key is refused
-  // here regardless of the bound character's role. A 'write' key then still
-  // passes through the same role check below (it acts as its bound character).
-  if (acting.apiScope && acting.apiScope !== 'write') {
+  // API-key writes need 'write' or the higher map-bound integration scope.
+  if (acting.apiScope === 'wormholesystems_sync' && acting.apiScopeMapId !== mapId) {
+    res.status(404).json({ error: 'Map not found' }); return null;
+  }
+  if (acting.apiScope && acting.apiScope !== 'write' && acting.apiScope !== 'wormholesystems_sync') {
     res.status(403).json({ error: "This API key cannot write (needs the 'write' scope)" }); return null;
   }
 
@@ -337,6 +348,12 @@ const pendingK162 = new Map<string, PendingK162>();
 // True when a map has an owning org that could have webhooks (corp or alliance).
 // Personal maps never notify, so we skip them without a DB round-trip.
 function hasOrg(meta: MapMeta): boolean { return meta.corpId != null || meta.allianceId != null; }
+
+/** True when this signature write came from the Thera/Turnur copy button,
+ *  identified by the provenance id that button stamps on every row it writes. */
+function fromScoutFeed(scoutConnectionId: unknown): boolean {
+  return typeof scoutConnectionId === 'string' && scoutConnectionId.length > 0;
+}
 
 export function dispatchK162(meta: MapMeta, sigId: string, systemId: string, actor: string | null): void {
   if (!hasOrg(meta)) {
@@ -3168,7 +3185,7 @@ mapsRouter.delete('/:mapId/systems/:systemId', async (req, res) => {
 
 mapsRouter.post('/:mapId/connections', async (req, res) => {
   const { mapId } = req.params;
-  const { id, sourceId, targetId, sourceHandle, targetHandle, connectionType, massStatus, timeStatus, size, sourceEveId, targetEveId } = req.body;
+  const { id, sourceId, targetId, sourceHandle, targetHandle, connectionType, massStatus, timeStatus, size, type, scoutConnectionId, sourceEveId, targetEveId } = req.body;
 
   const access = await requireMapWrite(res, mapId, req, true);
   if (!access) return;
@@ -3240,15 +3257,23 @@ mapsRouter.post('/:mapId/connections', async (req, res) => {
 
   let inserted = 0;
   try {
-    const ins = await db.query(
+    // `type` (the wormhole code) is accepted on create as well as on update.
+    // It used to be update-only on the reasoning that a fresh connection
+    // carries no type yet -- true when a hole is drawn by hand or by a jump,
+    // but not when it is copied from eve-scout, which knows the code up front.
+    // Patching it afterwards is not an option: this POST is deferred until
+    // both endpoints exist, so a follow-up PATCH can overtake it and be lost.
+    const ins = await withTopologyMapRowLock(mapId, client => client.query(
       `INSERT INTO map_connections
          (id, map_id, source_id, target_id, source_handle, target_handle,
-          connection_type, mass_status, time_status, size)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          connection_type, mass_status, time_status, size, wh_type, scout_connection_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT (id) DO NOTHING`,
       [id, mapId, sourceId, targetId, sourceHandle ?? null, targetHandle ?? null,
-       effectiveType, massStatus ?? null, timeStatus ?? null, size ?? 'large'],
-    );
+       effectiveType, massStatus ?? null, timeStatus ?? null, size ?? 'large',
+       typeof type === 'string' && type.trim() ? type.trim().toUpperCase() : null,
+       typeof scoutConnectionId === 'string' && scoutConnectionId ? scoutConnectionId : null],
+    ));
     inserted = ins.rowCount ?? 0;
   } catch (err) {
     // FK violation = one of the endpoint systems doesn't exist on the
@@ -3912,10 +3937,10 @@ mapsRouter.patch('/:mapId/connections/:connectionId', async (req, res) => {
 
   if (!sets.length) { res.status(400).json({ error: 'Nothing to update' }); return; }
 
-  await db.query(
+  await withTopologyMapRowLock(mapId, client => client.query(
     `UPDATE map_connections SET ${sets.join(', ')} WHERE id = $${vals.length + 1} AND map_id = $${vals.length + 2}`,
     [...vals, connectionId, mapId],
-  );
+  ).then(() => undefined));
   await touchMap(mapId);
   publishToMap(mapId, { type: 'connection.update', actor: req.get('x-client-id') ?? null, id: connectionId, updates });
   // A wormhole type was just filled in — e.g. sig auto-detect labelling a
@@ -3931,7 +3956,9 @@ mapsRouter.delete('/:mapId/connections/:connectionId', async (req, res) => {
   const { mapId, connectionId } = req.params;
   const access = await requireMapWrite(res, mapId, req);
   if (!access) return;
-  await db.query(`DELETE FROM map_connections WHERE id = $1 AND map_id = $2`, [connectionId, mapId]);
+  await withTopologyMapRowLock(mapId, client => client.query(
+    `DELETE FROM map_connections WHERE id = $1 AND map_id = $2`, [connectionId, mapId],
+  ).then(() => undefined));
   await touchMap(mapId);
   publishToMap(mapId, { type: 'connection.remove', actor: req.get('x-client-id') ?? null, id: connectionId });
   res.json({ ok: true });
@@ -4037,6 +4064,45 @@ mapsRouter.delete('/:mapId/connections/:connectionId/jumps', async (req, res) =>
 // mutate topology. The step arrays are stored verbatim and validated against the
 // live map when rendered, so a removed hop is flagged rather than re-routed.
 
+async function withMapRowLock<T>(mapId: string, write: (client: PoolClient) => Promise<T>): Promise<{ mapExists: boolean; value?: T }> {
+  const client = await db.connect();
+  let inTransaction = false;
+  try {
+    await client.query('BEGIN');
+    inTransaction = true;
+    const map = await client.query('SELECT id FROM maps WHERE id=$1 FOR UPDATE', [mapId]);
+    if (!map.rows.length) {
+      await client.query('ROLLBACK');
+      inTransaction = false;
+      return { mapExists: false };
+    }
+    const value = await write(client);
+    await client.query('COMMIT');
+    inTransaction = false;
+    return { mapExists: true, value };
+  } catch (error) {
+    if (inTransaction) await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function validRouteIdList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(id => typeof id === 'string' && UUID_RE.test(id));
+}
+
+async function routeReferencesExist(client: PoolClient, mapId: string, systemIds: string[], connectionIds: string[]): Promise<boolean> {
+  const systems = await client.query<{ id: string }>(
+    'SELECT id FROM map_systems WHERE map_id=$1 AND id=ANY($2::uuid[])', [mapId, systemIds]);
+  const foundSystems = new Set(systems.rows.map(row => row.id.toLowerCase()));
+  if (systemIds.some(id => !foundSystems.has(id.toLowerCase()))) return false;
+  const connections = await client.query<{ id: string }>(
+    'SELECT id FROM map_connections WHERE map_id=$1 AND id=ANY($2::uuid[])', [mapId, connectionIds]);
+  const foundConnections = new Set(connections.rows.map(row => row.id.toLowerCase()));
+  return connectionIds.every(id => foundConnections.has(id.toLowerCase()));
+}
+
 const routeSelect =
   `SELECT id, name, system_ids AS "systemIds", connection_ids AS "connectionIds",
           created_at AS "createdAt", updated_at AS "updatedAt"
@@ -4049,22 +4115,28 @@ mapsRouter.post('/:mapId/routes', async (req, res) => {
   const { id, name = '', systemIds = [], connectionIds = [] } = req.body as {
     id?: string; name?: string; systemIds?: string[]; connectionIds?: string[];
   };
-  if (!id || !Array.isArray(systemIds) || systemIds.length < 2) {
+  if (!id || !Array.isArray(systemIds) || systemIds.length < 2 || !validRouteIdList(systemIds) || !validRouteIdList(connectionIds)) {
     res.status(400).json({ error: 'A chain needs an id and at least two systems' });
     return;
   }
   const me = authUser(req);
   // New chains append to the bottom of the list (next sort_order for the map).
-  const ins = await db.query(
-    `INSERT INTO map_routes (id, map_id, name, system_ids, connection_ids, created_by_user_id, sort_order)
-     SELECT $1,$2,$3,$4,$5,$6, COALESCE(MAX(sort_order) + 1, 0) FROM map_routes WHERE map_id = $2
-     ON CONFLICT (id) DO NOTHING`,
-    [id, mapId, name, systemIds, connectionIds ?? [], me.userId],
-  );
+  const write = await withMapRowLock(mapId, async client => {
+    if (!await routeReferencesExist(client, mapId, systemIds, connectionIds)) return { invalidReferences: true, inserted: false };
+    const ins = await client.query(
+      `INSERT INTO map_routes (id, map_id, name, system_ids, connection_ids, created_by_user_id, sort_order)
+       SELECT $1,$2,$3,$4,$5,$6, COALESCE(MAX(sort_order) + 1, 0) FROM map_routes WHERE map_id = $2
+       ON CONFLICT (id) DO NOTHING`,
+      [id, mapId, name, systemIds, connectionIds, me.userId],
+    );
+    return { invalidReferences: false, inserted: (ins.rowCount ?? 0) > 0 };
+  });
+  if (!write.mapExists) { res.status(404).json({ error: 'Map not found' }); return; }
+  if (write.value?.invalidReferences) { res.status(400).json({ error: 'Route systems or connections are not on this map' }); return; }
   await touchMap(mapId);
   // Only a genuinely new row broadcasts — a retried POST hits ON CONFLICT DO
   // NOTHING (rowCount 0), so we don't double-post the same chain to Discord.
-  const inserted = (ins.rowCount ?? 0) > 0;
+  const inserted = write.value?.inserted ?? false;
   db.query(`${routeSelect} WHERE id = $1 AND map_id = $2`, [id, mapId])
     .then(({ rows }) => {
       const route = rows[0] as { name: string; systemIds: string[]; connectionIds: string[] } | undefined;
@@ -4091,10 +4163,29 @@ mapsRouter.patch('/:mapId/routes/:routeId', async (req, res) => {
     if (key in updates) { sets.push(`${col} = $${vals.length + 1}`); vals.push(updates[key]); }
   }
   if (!sets.length) { res.status(400).json({ error: 'Nothing to update' }); return; }
-  await db.query(
-    `UPDATE map_routes SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${vals.length + 1} AND map_id = $${vals.length + 2}`,
-    [...vals, routeId, mapId],
-  );
+  if ('systemIds' in updates && !validRouteIdList(updates.systemIds) ||
+      'connectionIds' in updates && !validRouteIdList(updates.connectionIds)) {
+    res.status(400).json({ error: 'Route systems and connections must be UUID arrays' }); return;
+  }
+  const write = await withMapRowLock(mapId, async client => {
+    if ('systemIds' in updates || 'connectionIds' in updates) {
+      const current = await client.query<{ systemIds: string[]; connectionIds: string[] }>(
+        'SELECT system_ids AS "systemIds", connection_ids AS "connectionIds" FROM map_routes WHERE id=$1 AND map_id=$2 FOR UPDATE',
+        [routeId, mapId]);
+      if (current.rows.length) {
+        const systemIds = 'systemIds' in updates ? updates.systemIds as string[] : current.rows[0].systemIds;
+        const connectionIds = 'connectionIds' in updates ? updates.connectionIds as string[] : current.rows[0].connectionIds;
+        if (!await routeReferencesExist(client, mapId, systemIds, connectionIds)) return false;
+      }
+    }
+    await client.query(
+      `UPDATE map_routes SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${vals.length + 1} AND map_id = $${vals.length + 2}`,
+      [...vals, routeId, mapId],
+    );
+    return true;
+  });
+  if (!write.mapExists) { res.status(404).json({ error: 'Map not found' }); return; }
+  if (write.value === false) { res.status(400).json({ error: 'Route systems or connections are not on this map' }); return; }
   await touchMap(mapId);
   publishToMap(mapId, { type: 'route.update', actor: req.get('x-client-id') ?? null, id: routeId, updates });
   res.json({ ok: true });
@@ -4112,13 +4203,15 @@ mapsRouter.put('/:mapId/routes/order', async (req, res) => {
     res.status(400).json({ error: 'orderedIds must be a non-empty array' });
     return;
   }
-  await db.query(
+  if (!validRouteIdList(orderedIds)) { res.status(400).json({ error: 'orderedIds must be UUIDs' }); return; }
+  const write = await withMapRowLock(mapId, client => client.query(
     `UPDATE map_routes AS r
         SET sort_order = o.ord - 1, updated_at = NOW()
        FROM unnest($1::uuid[]) WITH ORDINALITY AS o(id, ord)
       WHERE r.id = o.id AND r.map_id = $2`,
     [orderedIds, mapId],
-  );
+  ));
+  if (!write.mapExists) { res.status(404).json({ error: 'Map not found' }); return; }
   await touchMap(mapId);
   publishToMap(mapId, { type: 'route.reorder', actor: req.get('x-client-id') ?? null, orderedIds });
   res.json({ ok: true });
@@ -4128,7 +4221,8 @@ mapsRouter.delete('/:mapId/routes/:routeId', async (req, res) => {
   const { mapId, routeId } = req.params;
   const access = await requireMapContentWrite(res, mapId, req);
   if (!access) return;
-  await db.query(`DELETE FROM map_routes WHERE id = $1 AND map_id = $2`, [routeId, mapId]);
+  const write = await withMapRowLock(mapId, client => client.query(`DELETE FROM map_routes WHERE id = $1 AND map_id = $2`, [routeId, mapId]));
+  if (!write.mapExists) { res.status(404).json({ error: 'Map not found' }); return; }
   await touchMap(mapId);
   publishToMap(mapId, { type: 'route.remove', actor: req.get('x-client-id') ?? null, id: routeId });
   res.json({ ok: true });
@@ -4150,12 +4244,22 @@ mapsRouter.post('/:mapId/systems/:systemId/signatures', async (req, res) => {
   if (!access) return;
   if (!(await verifySystemInMap(res, systemId, mapId))) return;
   const { sigId = '', sigType = 'unknown', name = '', notes = '', whType = '', whLeadsTo = '', ghostType = '', massStatus = '', timeStatus = '' } = req.body as Record<string, string>;
+  // Read separately so widening the cast doesn't make every field nullable.
+  const scoutConnectionId = (req.body as { scoutConnectionId?: unknown }).scoutConnectionId;
   const me = authUser(req);
   const row = await createSignature(
-    mapId, systemId, { sigId, sigType, name, notes, whType, whLeadsTo, ghostType, massStatus, timeStatus },
+    mapId, systemId, { sigId, sigType, name, notes, whType, whLeadsTo, ghostType, massStatus, timeStatus,
+      scoutConnectionId: typeof scoutConnectionId === 'string' && scoutConnectionId ? scoutConnectionId : null },
     { userId: me.userId, clientId: req.get('x-client-id') ?? null },
   );
-  if ((whType ?? '').toUpperCase() === 'K162') dispatchK162(access, row.id, systemId, me.characterName);
+  // A K162 copied from the Thera/Turnur feed is bookkeeping, not a sighting:
+  // the hole was already on a public listing and the pilot is looking at the
+  // row as they press the button. Half of a bulk copy is K162 by definition
+  // (every hole is K162 at one end), so dispatching here would fire a notice
+  // per connection. Suppressed on provenance, like the other bulk writes.
+  if (!fromScoutFeed(scoutConnectionId) && (whType ?? '').toUpperCase() === 'K162') {
+    dispatchK162(access, row.id, systemId, me.characterName);
+  }
   res.status(201).json(row);
 });
 
@@ -4172,7 +4276,12 @@ mapsRouter.patch('/:mapId/systems/:systemId/signatures/:sigId', async (req, res)
   );
   // Discord notice fires once on a transition into K162; flush any pending
   // notice the moment the leads-to is known. (Both decided inside updateSignature.)
-  if (shouldDispatch) dispatchK162(access, sigId, systemId, me.characterName);
+  // See the POST above for why a feed-sourced K162 does not notify. A flush
+  // still runs: it only releases a notice an earlier, human K162 already
+  // queued, and that one is worth sending once its destination is known.
+  if (shouldDispatch && !fromScoutFeed(updates.scoutConnectionId)) {
+    dispatchK162(access, sigId, systemId, me.characterName);
+  }
   if (shouldFlush) flushK162(sigId);
   res.json({ ok: true });
 });
@@ -4190,6 +4299,77 @@ mapsRouter.delete('/:mapId/systems/:systemId/signatures/:sigId', async (req, res
 // content anywhere in the chain without opening every system's sig pane —
 // powers the watchlist (wh_type matching) and the content filter (sig type +
 // name). Returns only the (systemId, sigType, name, whType) tuple per sig.
+// Clean up after the Thera/Turnur copy button: drop the rows it wrote for
+// holes the feed no longer lists, and sever the connections behind them.
+//
+// Server-side on purpose. It reads the feed itself rather than taking a list
+// of live ids from the caller, so a stale or doctored client cannot talk the
+// server into deleting a chain.
+mapsRouter.post('/:mapId/scout-cleanup', async (req, res) => {
+  const { mapId } = req.params;
+  const access = await requireMapContentWrite(res, mapId, req);
+  if (!access) return;
+
+  const hub = String((req.body as { hub?: unknown }).hub ?? '');
+  if (hub !== 'Thera' && hub !== 'Turnur') {
+    res.status(400).json({ error: 'hub must be Thera or Turnur' });
+    return;
+  }
+
+  const live = (await getScoutConnections())
+    .filter((c) => c.outSystemName === hub)
+    .map((c) => c.id);
+
+  // Anything still listed had its clock reset by the copy itself; this covers
+  // rows on systems the copy skipped this time round.
+  await db.query(
+    `UPDATE map_signatures s SET scout_last_seen = NOW()
+       FROM map_systems ms
+      WHERE s.system_id = ms.id AND ms.map_id = $1
+        AND s.scout_connection_id = ANY($2::text[])`,
+    [mapId, live],
+  );
+
+  // Delete only rows that are ALL of: ours to begin with, absent from the
+  // feed, absent for long enough that a glitchy read cannot be the cause, and
+  // untouched since we wrote them.
+  //
+  // "Untouched" is name and notes still empty and the type still wormhole --
+  // the fields a person fills in. It is deliberately conservative: a row
+  // somebody has annotated stays, even if its hole really is gone, because
+  // leaving a dead hole on a map costs a scout one delete and removing a live
+  // note costs them work they cannot get back.
+  const { rows: removed } = await db.query<{ id: string; scout_connection_id: string }>(
+    `DELETE FROM map_signatures s
+       USING map_systems ms
+      WHERE s.system_id = ms.id AND ms.map_id = $1
+        AND s.scout_connection_id IS NOT NULL
+        AND NOT (s.scout_connection_id = ANY($2::text[]))
+        AND s.scout_last_seen < NOW() - ($3 || ' minutes')::interval
+        AND s.name = '' AND s.notes = '' AND s.sig_type = 'wormhole'
+      RETURNING s.id, s.scout_connection_id`,
+    [mapId, live, SCOUT_GRACE_MINUTES],
+  );
+
+  // The connection is severed, not deleted -- same treatment any wormhole gets
+  // when its backing signature goes, so a collapsed Thera exit reads like a
+  // collapsed hole rather than vanishing out of the chain.
+  const goneIds = [...new Set(removed.map((r) => r.scout_connection_id))];
+  const { rowCount: broken } = goneIds.length === 0
+    ? { rowCount: 0 }
+    : await db.query(
+        `UPDATE map_connections SET broken = TRUE
+          WHERE map_id = $1 AND scout_connection_id = ANY($2::text[]) AND broken = FALSE`,
+        [mapId, goneIds],
+      );
+
+  if (removed.length > 0 || (broken ?? 0) > 0) {
+    await touchMap(mapId);
+    publishToMap(mapId, { type: 'map.resync', actor: req.get('x-client-id') ?? null });
+  }
+  res.json({ removed: removed.length, broken: broken ?? 0 });
+});
+
 mapsRouter.get('/:mapId/signatures', async (req, res) => {
   const { mapId } = req.params;
   const access = await getMapAccess(mapId, req);
@@ -4503,7 +4683,17 @@ mapsRouter.get('/:mapId/shares', async (req, res) => {
     .filter((x): x is number => x != null);
   const names = await resolveEntityNames(ids);
 
+  // How many accounts have taken this map off their own list. Only meaningful
+  // for an org grant — a personal one is left by deleting the grant, so there
+  // would be no row here to count. Reported so the owner can tell "nobody is
+  // using this" from "nobody can see it".
+  const { rows: outRows } = await db.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM map_share_optouts WHERE map_id = $1`, [mapId],
+  );
+  const optedOut = Number(outRows[0]?.n ?? 0);
+
   res.json({
+    optedOut,
     shares: rows.map((r) => {
       const kind = r.targetCharacterId != null ? 'character' : r.targetCorpId != null ? 'corp' : 'alliance';
       const targetId = (r.targetCharacterId ?? r.targetCorpId ?? r.targetAllianceId)!;
@@ -4669,7 +4859,46 @@ mapsRouter.delete('/:mapId/shares/mine', async (req, res) => {
     `DELETE FROM map_shares WHERE map_id = $1 AND target_character_id = $2`,
     [mapId, callerChar],
   );
-  if (!rowCount) { res.status(404).json({ error: 'No personal share to leave' }); return; }
+  if (rowCount) { res.json({ ok: true, kind: 'share-removed' }); return; }
+
+  // No personal grant. The map may still reach them through a corp or alliance
+  // grant, which is ONE row meaning everyone in the org — there is nothing
+  // individual to delete, and deleting it would take the map from every
+  // member. Record the opt-out instead, so leaving means the same thing to the
+  // person either way and the owner can see it happened.
+  //
+  // Confirm they can actually see the map first, via the same access check
+  // every other read uses, so this can't be used to probe for map ids or to
+  // accumulate rows against maps the caller has nothing to do with.
+  const access = await getMapAccess(mapId, req);
+  if (!access || access.accessKind !== 'shared') {
+    res.status(404).json({ error: 'No share to leave' }); return;
+  }
+  const ownerId = await resolveOwnerId(req);
+  if (ownerId == null) { res.status(400).json({ error: 'No account owner' }); return; }
+  await db.query(
+    `INSERT INTO map_share_optouts (map_id, owner_id) VALUES ($1, $2)
+     ON CONFLICT (map_id, owner_id) DO NOTHING`,
+    [mapId, ownerId],
+  );
+  res.json({ ok: true, kind: 'opted-out' });
+});
+
+// POST /api/maps/:mapId/shares/mine/restore — undo the opt-out above, putting
+// an org-shared map back in this account's list. Only ever deletes this
+// account's own row, so it cannot affect anyone else; a no-op if they never
+// opted out. There is deliberately no counterpart for a PERSONAL share: that
+// one deleted the grant itself, and only the owner can give it back.
+mapsRouter.post('/:mapId/shares/mine/restore', async (req, res) => {
+  const { mapId } = req.params;
+  if (!UUID_RE.test(mapId)) { res.status(404).json({ error: 'Map not found' }); return; }
+  if (!req.session.userId) { res.status(401).json({ error: 'Not authenticated' }); return; }
+  const ownerId = await resolveOwnerId(req);
+  if (ownerId == null) { res.status(400).json({ error: 'No account owner' }); return; }
+  await db.query(
+    `DELETE FROM map_share_optouts WHERE map_id = $1 AND owner_id = $2`,
+    [mapId, ownerId],
+  );
   res.json({ ok: true });
 });
 

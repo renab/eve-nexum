@@ -45,11 +45,15 @@ export interface AuthUser {
   allianceId:    number | null;   // the acting character's alliance (for alliance-scoped access)
   /** Present only for API-key requests; the key's scope. */
   apiScope?:     ApiScope;
+  /** Present for map-bound WormholeSystems integration keys. */
+  apiScopeMapId?: string | null;
+  /** Database identity used to revalidate API-key scope inside write transactions. */
+  apiTokenId?:   string;
 }
 
-// Linear capability hierarchy: read ⊂ events ⊂ write. A higher scope implies
-// every lower one (a 'write' key can also read and stream).
-export type ApiScope = 'read' | 'events' | 'write';
+// Existing keys retain their linear hierarchy; the integration scope is a
+// map-bound superset of write, including only its dedicated topology route.
+export type ApiScope = 'read' | 'events' | 'write' | 'wormholesystems_sync';
 
 declare module 'express-serve-static-core' {
   interface Request {

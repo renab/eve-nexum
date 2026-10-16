@@ -11,10 +11,13 @@ import { ConfirmModal } from './ConfirmModal';
 import { Select } from './Select';
 import styles from './ApiKeysModal.module.css';
 
-const SCOPE_CLASS: Record<'read' | 'events' | 'write', string> = {
+type ApiScope = 'read' | 'events' | 'write' | 'wormholesystems_sync';
+
+const SCOPE_CLASS: Record<ApiScope, string> = {
   read:   styles.scopeRead,
   events: styles.scopeEvents,
   write:  styles.scopeWrite,
+  wormholesystems_sync: styles.scopeWrite,
 };
 
 // One row as returned by GET /api/keys — never includes the secret, only the
@@ -23,7 +26,9 @@ interface ApiKey {
   id:                   string;
   name:                 string;
   tokenPrefix:          string;
-  scope:                'read' | 'events' | 'write';
+  scope:                ApiScope;
+  scopeMapId:           string | null;
+  scopeMapName:         string | null;
   contextUserId:        number | null;
   contextCharacterName: string | null;
   lastUsedAt:           string | null;
@@ -41,6 +46,7 @@ export function ApiKeysModal({ onClose }: { onClose: () => void }) {
   const now = useNow30s();
 
   const [keys, setKeys]       = useState<ApiKey[]>([]);
+  const [maps, setMaps]       = useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
@@ -50,7 +56,8 @@ export function ApiKeysModal({ onClose }: { onClose: () => void }) {
   const [charId, setCharId]       = useState<number | null>(
     () => (characters.find((c) => c.active) ?? characters[0])?.characterId ?? null,
   );
-  const [scope, setScope]         = useState<'read' | 'events' | 'write'>('read');
+  const [scope, setScope]         = useState<ApiScope>('read');
+  const [scopeMapId, setScopeMapId] = useState('');
   const [expiryDays, setExpiry]   = useState<number>(0);
   const [creating, setCreating]   = useState(false);
   // The raw secret, surfaced exactly once right after creation.
@@ -65,8 +72,14 @@ export function ApiKeysModal({ onClose }: { onClose: () => void }) {
   []);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    api<{ maps: Array<{ id: string; name: string }> }>('/api/v1/maps')
+      .then((r) => setMaps(r.maps))
+      .catch(() => setMaps([]));
+  }, []);
 
-  const canCreate = name.trim().length > 0 && charId != null && !creating;
+  const canCreate = name.trim().length > 0 && charId != null && !creating &&
+    (scope !== 'wormholesystems_sync' || !!scopeMapId);
 
   async function create() {
     if (!canCreate) return;
@@ -78,7 +91,8 @@ export function ApiKeysModal({ onClose }: { onClose: () => void }) {
         : null;
       const created = await api<{ name: string; key: string }>('/api/keys', {
         method: 'POST',
-        body:   JSON.stringify({ name: name.trim(), contextCharacterId: charId, scope, expiresAt }),
+        body:   JSON.stringify({ name: name.trim(), contextCharacterId: charId, scope,
+          scopeMapId: scope === 'wormholesystems_sync' ? scopeMapId : null, expiresAt }),
       });
       // Re-fetch so the new row carries the canonical shape (bound character
       // name, etc.) the POST response doesn't include.
@@ -169,14 +183,23 @@ export function ApiKeysModal({ onClose }: { onClose: () => void }) {
               <span>{t('apiKeys.scope')}</span>
               <Select
                 value={scope}
-                onChange={(v) => setScope(v as 'read' | 'events' | 'write')}
+                 onChange={(v) => setScope(v as ApiScope)}
                 options={[
                   { value: 'read',   label: t('apiKeys.scopeRead') },
                   { value: 'events', label: t('apiKeys.scopeEvents') },
                   { value: 'write',  label: t('apiKeys.scopeWrite') },
+                  { value: 'wormholesystems_sync', label: t('apiKeys.scopeWormholeSystems') },
                 ]}
               />
             </label>
+            {scope === 'wormholesystems_sync' && (
+              <label className="field">
+                <span>{t('apiKeys.scopeMap')}</span>
+                <Select value={scopeMapId} onChange={setScopeMapId}
+                  options={maps.map((map) => ({ value: map.id, label: map.name }))} />
+                <small>{t('apiKeys.scopeWormholeSystemsHelp')}</small>
+              </label>
+            )}
             <label className="field">
               <span>{t('apiKeys.expiry')}</span>
               <Select
@@ -210,7 +233,8 @@ export function ApiKeysModal({ onClose }: { onClose: () => void }) {
                           <span className={styles.name}>{k.name}</span>
                           <code className={styles.prefix}>{k.tokenPrefix}…</code>
                           <span className={[styles.scope, SCOPE_CLASS[k.scope]].filter(Boolean).join(' ')}>
-                            {k.scope === 'write' ? t('apiKeys.scopeWriteBadge')
+                            {k.scope === 'wormholesystems_sync' ? t('apiKeys.scopeWormholeSystemsBadge')
+                              : k.scope === 'write' ? t('apiKeys.scopeWriteBadge')
                               : k.scope === 'events' ? t('apiKeys.scopeEventsBadge')
                               : t('apiKeys.scopeReadBadge')}
                           </span>
@@ -222,6 +246,7 @@ export function ApiKeysModal({ onClose }: { onClose: () => void }) {
                         </div>
                         <div className={styles.meta}>
                           <span>{t('apiKeys.boundTo', { name: k.contextCharacterName ?? '—' })}</span>
+                          {k.scope === 'wormholesystems_sync' && <span>{t('apiKeys.scopeMapBound', { name: k.scopeMapName ?? '—' })}</span>}
                           <span>{k.lastUsedAt
                             ? t('apiKeys.lastUsed', { ago: timeAgo(t, new Date(k.lastUsedAt)) })
                             : t('apiKeys.neverUsed')}</span>

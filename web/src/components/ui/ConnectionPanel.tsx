@@ -10,13 +10,17 @@ import { systemDisplayName } from '../../utils/systemName';
 import { useCharacterLocation } from '../../hooks/useCharacterLocation';
 import { WHTypeInfo } from './WHTypeInfo';
 import { Select } from './Select';
-import { whSizeForType } from '../../utils/wormholeSize';
+import { inferredSize } from '../../utils/wormholeSize';
 import { effectiveExpiryMs, lifeBucket, knownMaxLifeHours } from '../../utils/whLifetime';
 import { ConfirmModal } from './ConfirmModal';
 import { IconPickerDialog } from './IconPickerDialog';
-import { XIcon, TagIcon } from '../../icons';
+import { FloatingPanel, type PanelGeometry } from './FloatingPanel';
+import { useUserSetting } from '../../hooks/useUserSetting';
+import { XIcon, TagIcon, ArrowSquareOutIcon } from '../../icons';
 import { DynamicIcon } from '../DynamicIcon';
 import { api } from '../../api/client';
+import { useFlagPresets } from '../../hooks/useFlagPresets';
+import { useOrgFlagPresets } from '../../hooks/useOrgFlagPresets';
 import type { MassStatus, TimeStatus, ConnectionSize, Signature, SystemClass } from '../../types';
 import {
   massRange, collapseState, passOutcome, safePassesLeft, flipSide,
@@ -34,6 +38,11 @@ const PRESETS: Array<{ label: string; kg: number }> = [
   { label: '+ BS hot (200)',   kg: 200_000_000 },
   { label: '+ Dread (1300)',   kg: 1_300_000_000 },
 ];
+
+// Where the floating connection window opens the first time, before the pilot
+// has dragged it anywhere. Deliberately modest: the docked strip used to take a
+// third of the viewport, and the point of the window is to stop doing that.
+const DEFAULT_GEO: PanelGeometry = { x: 120, y: 120, w: 560, h: 420 };
 
 // Compact mass for button labels: "200M", "1.3B".
 function massShort(kg: number): string {
@@ -126,9 +135,26 @@ export function ConnectionPanel() {
   const [rollerCustom, setRollerCustom] = useState(false);
   // Open state for the connection-flag icon picker.
   const [flagPickerOpen, setFlagPickerOpen] = useState(false);
+  // Saved flag templates: the org's standardised set first, then the pilot's
+  // own. Applying one is an ordinary field update, so it syncs, undoes and
+  // renders on the edge exactly like a hand-set flag.
+  const [myPresets]  = useFlagPresets();
+  const orgPresets   = useOrgFlagPresets();
   // Signatures on the two endpoint systems — feeds both the WH-type auto-detect
   // and the per-end "backing signature" link dropdowns below.
   const [endpointSigs, setEndpointSigs] = useState<{ src: Signature[]; tgt: Signature[] }>({ src: [], tgt: [] });
+
+  // Docked strip vs floating window. Floating is the default: docked, this panel
+  // is six columns of controls and took roughly a third of the viewport, over
+  // the map it describes. Both the choice and the window geometry are
+  // cross-device settings, so the panel comes back where it was left.
+  const [floating, setFloating] = useUserSetting<boolean>('nexum.connPanel.float', true);
+  const [savedGeo, setSavedGeo] = useUserSetting<PanelGeometry>('nexum.connPanel.geometry', DEFAULT_GEO);
+  // Height follows the content until the pilot drags the corner. A stargate link
+  // is two lines and a button; a wormhole with a jump log is many times that, and
+  // one fixed height cannot serve both without leaving the short one mostly
+  // empty. Dragging the corner is taken as "I want this size" and ends it.
+  const [autoHeight, setAutoHeight] = useUserSetting<boolean>('nexum.connPanel.autoHeight', true);
 
   // No-op the mutation calls when the user lacks topology permission. The
   // panel still renders so readonly users can inspect the connection.
@@ -195,19 +221,38 @@ export function ConnectionPanel() {
   const sizeSyncedFor = useRef<string | null>(null);
   useEffect(() => {
     if (!conn || conn.connectionType !== 'standard') return;
-    const code = conn.type?.toUpperCase();
-    if (!code) return;
-    const key = `${conn.id}:${code}`;
+    const code = conn.type?.toUpperCase() ?? null;
+    // Re-runs when an endpoint's class arrives, not just when the code changes:
+    // a K162 drawn before the far system resolved still gets capped.
+    const key = `${conn.id}:${code ?? ''}:${src?.systemClass ?? ''}:${tgt?.systemClass ?? ''}`;
     if (key === sizeSyncedFor.current) return;
-    const cls = whSizeForType(code, whTypes);
-    if (!cls) return; // types not loaded yet / unknown code — retry on load
+
+    const next = inferredSize({
+      code, whTypes, currentSize: conn.size,
+      classA: src?.systemClass, classB: tgt?.systemClass,
+    });
+    // Nothing to apply. Leave the key unset while the types are still loading so
+    // a known code still syncs once they arrive.
+    if (!next) { if (code && whTypes[code]) sizeSyncedFor.current = key; return; }
+
     sizeSyncedFor.current = key;
-    if (cls !== conn.size) updateConnection(conn.id, { size: cls });
+    if (next !== conn.size) updateConnection(conn.id, { size: next });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conn?.id, conn?.type, conn?.connectionType, whTypes]);
+  }, [conn?.id, conn?.type, conn?.connectionType, conn?.size, src?.systemClass, tgt?.systemClass, whTypes]);
 
   // Persist the roller config whenever the pilot tweaks it.
   useEffect(() => { saveRoller(roller); }, [roller]);
+
+  // Escape closes the panel, so it is dismissable without hunting for a button.
+  // Skipped while either of this panel's own dialogs is up — those close on
+  // Escape themselves, and stealing the key would shut the whole panel instead
+  // of the dialog in front of it.
+  useEffect(() => {
+    if (!selectedConnectionId || flagPickerOpen || pendingPass) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') selectConnection(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedConnectionId, flagPickerOpen, pendingPass, selectConnection]);
 
   // Load the roll session (side + undo stack) when the selected connection
   // changes. Done during render (React's "adjust state on prop change" pattern)
@@ -309,18 +354,41 @@ export function ConnectionPanel() {
   // don't apply to stargates or Ansiblex jump bridges — only 'standard' links.
   const isWormhole = conn.connectionType === 'standard';
 
-  return (
-    <aside className="system-panel">
+  const body = (
+    <aside className={`system-panel${floating ? ' system-panel--float' : ''}`}>
       {/* Title + broken banner stack as one left column, so the banner sits
           directly under the connection name and wraps within it instead of
           becoming its own squeezed column that overlaps on narrow screens. */}
+      {/* Floating mode draws its own title bar, so the header below would be a
+          duplicate title inside the window — and with nothing left in it the
+          column would still sit in the flex row contributing a gap, reading as
+          an indent on everything after it. Dropped entirely unless the broken
+          banner needs somewhere to live. */}
+      {(!floating || conn.broken) && (
       <div className="conn-headcol">
-        <div className="system-panel__header">
-          <h2 className="system-panel__title">
-            {src ? systemDisplayName(src) : '?'} → {tgt ? systemDisplayName(tgt) : '?'}
-          </h2>
-          <button className="icon-btn" onClick={() => selectConnection(null)} title={t('actions.close')}><XIcon size={14} weight="bold" /></button>
-        </div>
+        {!floating && (
+          <div className="system-panel__header">
+            <h2 className="system-panel__title">
+              {src ? systemDisplayName(src) : '?'} → {tgt ? systemDisplayName(tgt) : '?'}
+            </h2>
+            <button
+              className="icon-btn"
+              onClick={() => setFloating(true)}
+              title={t('panel.undock')}
+              aria-label={t('panel.undock')}
+            >
+              <ArrowSquareOutIcon size={14} weight="regular" />
+            </button>
+            <button
+              className="icon-btn"
+              onClick={() => selectConnection(null)}
+              title={t('actions.close')}
+              aria-label={t('actions.close')}
+            >
+              <XIcon size={14} weight="bold" />
+            </button>
+          </div>
+        )}
 
         {conn.broken && (
           <div className="conn-broken-banner">
@@ -337,6 +405,7 @@ export function ConnectionPanel() {
           </div>
         )}
       </div>
+      )}
 
       {!isWormhole && (
         <p className="conn-gate-note">
@@ -460,6 +529,48 @@ export function ConnectionPanel() {
           old one. Synced to every viewer via the connection update path. */}
       <label className="field conn-flag">
         <span>{t('connPanel.flagLabel')}</span>
+        {(orgPresets.length > 0 || myPresets.length > 0) && (
+          <div className="conn-flag__presets">
+            {orgPresets.length > 0 && (
+              <>
+                <span className="conn-flag__presets-label">{t('flagPresets.orgGroup')}</span>
+                {orgPresets.map((p) => (
+                  <button
+                    key={`org-${p.id}`}
+                    type="button"
+                    className="conn-flag__preset"
+                    disabled={!canEdit}
+                    style={{ borderColor: p.color, color: p.color }}
+                    title={p.name}
+                    onClick={() => update({ flagIcon: p.icon, flagColor: p.color, flagNote: p.name })}
+                  >
+                    <DynamicIcon name={p.icon} size={13} weight="fill" />
+                    <span>{p.name}</span>
+                  </button>
+                ))}
+              </>
+            )}
+            {myPresets.length > 0 && (
+              <>
+                {orgPresets.length > 0 && <span className="conn-flag__presets-label">{t('flagPresets.mineGroup')}</span>}
+                {myPresets.map((p) => (
+                  <button
+                    key={`me-${p.id}`}
+                    type="button"
+                    className="conn-flag__preset"
+                    disabled={!canEdit}
+                    style={{ borderColor: p.color, color: p.color }}
+                    title={p.name}
+                    onClick={() => update({ flagIcon: p.icon, flagColor: p.color, flagNote: p.name })}
+                  >
+                    <DynamicIcon name={p.icon} size={13} weight="fill" />
+                    <span>{p.name}</span>
+                  </button>
+                ))}
+              </>
+            )}
+          </div>
+        )}
         <div className="conn-flag__row">
           {(() => {
             return (
@@ -812,5 +923,33 @@ export function ConnectionPanel() {
         {t('connPanel.removeConnection')}
       </button>
     </aside>
+  );
+
+  if (!floating) return body;
+
+  // Clamp the remembered geometry to the CURRENT viewport, so a window placed on
+  // a larger screen doesn't reopen off the edge of a smaller one with no way to
+  // drag it back. Size first, then the corner against that size.
+  const w = Math.max(320, Math.min(savedGeo.w, window.innerWidth));
+  const h = Math.max(200, Math.min(savedGeo.h, window.innerHeight));
+  const geometry: PanelGeometry = {
+    w, h,
+    x: Math.max(0, Math.min(savedGeo.x, window.innerWidth  - w)),
+    y: Math.max(0, Math.min(savedGeo.y, window.innerHeight - h)),
+  };
+
+  return (
+    <FloatingPanel
+      title={`${src ? systemDisplayName(src) : '?'} → ${tgt ? systemDisplayName(tgt) : '?'}`}
+      geometry={geometry}
+      onCommit={setSavedGeo}
+      onRedock={() => setFloating(false)}
+      onClose={() => selectConnection(null)}
+      autoHeight={autoHeight}
+      onManualResize={() => setAutoHeight(false)}
+      zIndex={47}
+    >
+      {body}
+    </FloatingPanel>
   );
 }

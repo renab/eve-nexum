@@ -25,13 +25,14 @@ export async function apiKeyAuth(req: Request, res: Response, next: NextFunction
   try {
     const { rows } = await db.query<{
       id: string; ownerId: number; contextUserId: number | null;
-      scope: string; expiresAt: Date | null;
+      scope: string; scopeMapId: string | null; expiresAt: Date | null;
       role: Role | null; corpId: number | null; allianceId: number | null; characterId: number | null; characterName: string | null;
     }>(
       `SELECT t.id,
               t.owner_id          AS "ownerId",
               t.context_user_id   AS "contextUserId",
               t.scope,
+              t.scope_map_id AS "scopeMapId",
               t.expires_at        AS "expiresAt",
               u.role,
               u.corp_id           AS "corpId",
@@ -55,7 +56,11 @@ export async function apiKeyAuth(req: Request, res: Response, next: NextFunction
       res.status(401).json({ error: 'API key is inactive (bound character removed)' }); return;
     }
 
-    const scope: ApiScope = row.scope === 'write' ? 'write' : row.scope === 'events' ? 'events' : 'read';
+    const scope: ApiScope = row.scope === 'wormholesystems_sync' ? 'wormholesystems_sync'
+      : row.scope === 'write' ? 'write' : row.scope === 'events' ? 'events' : 'read';
+    if (scope === 'wormholesystems_sync' && !row.scopeMapId) {
+      res.status(401).json({ error: 'API key is inactive (integration map binding missing)' }); return;
+    }
     req.apiAuth = {
       userId:        row.contextUserId,
       characterId:   row.characterId,
@@ -65,6 +70,8 @@ export async function apiKeyAuth(req: Request, res: Response, next: NextFunction
       corpId:        row.corpId,
       allianceId:    row.allianceId,
       apiScope:      scope,
+      apiScopeMapId: row.scopeMapId,
+      apiTokenId:    row.id,
     };
 
     // Best-effort, throttled last_used_at bump — never blocks the request.

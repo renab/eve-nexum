@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { AuthProvider } from './context/AuthProvider';
 import { useAuth, isAdminRole } from './context/AuthContext';
@@ -11,13 +11,32 @@ import { MapSidebar } from './components/ui/MapSidebar';
 import { Sidebar } from './components/ui/Sidebar';
 import { ProximityOptInModal } from './components/ui/ProximityOptInModal';
 import { CommandPaletteModal } from './components/ui/CommandPaletteModal';
-import { LandingPage } from './components/ui/LandingPage';
 import { Toaster } from './components/ui/Toaster';
 import { toast } from './utils/toastStore';
+import { useRefreshLastKnown } from './hooks/useRefreshLastKnown';
+
+// Route-level code splitting. Each of these is reached by exactly one branch
+// of the switch in AppShell, and most people hit none of them:
+//   AdminPage      2.5k lines + chart.js, for admins only
+//   LandingPage    the public page + its interactive DemoMap, for the logged out
+//   SharedMapView  only ever reached through a /share/<token> link
+// Statically imported, all three shipped to every mapper on every load.
+const LandingPage   = lazy(() => import('./components/ui/LandingPage').then((m) => ({ default: m.LandingPage })));
+const AdminPage     = lazy(() => import('./components/ui/AdminPage').then((m) => ({ default: m.AdminPage })));
+const SharedMapView = lazy(() => import('./components/ui/SharedMapView').then((m) => ({ default: m.SharedMapView })));
+
+// The same screen the auth check already shows while it waits, reused so a
+// route chunk arriving looks like loading rather than like a flicker.
+function RouteLoading() {
+  return (
+    <div className="loading-screen">
+      <img className="loading-screen__logo" src="/screen.png" alt="Nexum" />
+    </div>
+  );
+}
+import { applyDensity, normaliseDensity, DEFAULT_DENSITY } from './utils/density';
 import i18n from './i18n';
 import { TooltipLayer } from './components/ui/TooltipLayer';
-import { AdminPage } from './components/ui/AdminPage';
-import { SharedMapView } from './components/ui/SharedMapView';
 import { useMapStore } from './store/mapStore';
 import { useLocationTracking } from './hooks/useLocationTracking';
 import { useMapEventStream } from './hooks/useMapEventStream';
@@ -37,6 +56,8 @@ let hydratedForUserId: number | null = null;
 
 function MapApp() {
   const { user } = useAuth();
+  // Keeps the cached last-known location honest once the pilot logs off.
+  useRefreshLastKnown();
   const mapId               = useMapStore((s) => s.map.id);
   const selectedSystemId    = useMapStore((s) => s.selectedSystemId);
   const selectedConnectionId = useMapStore((s) => s.selectedConnectionId);
@@ -73,6 +94,15 @@ function MapApp() {
     }
   }, [colorVision]);
 
+  // Interface density → data attribute on <html>, same mechanism as the colour
+  // palette above. This is the box metrics around the text; --font-scale above
+  // is the text itself. They are deliberately independent, so large type in
+  // tight chrome is a reachable combination.
+  const [density] = useUserSetting<string>('nexum.ui.density', DEFAULT_DENSITY);
+  useEffect(() => {
+    applyDensity(normaliseDensity(density));
+  }, [density]);
+
   // Only re-run when the user's identity changes, not on every shape mutation
   // of the user object (panel reorder, prefs toggle, etc).
   const userId = user?.id;
@@ -86,7 +116,7 @@ function MapApp() {
       if (hydratedForUserId !== user.id) {
         hydratedForUserId = user.id;
         applyPreferences({ compactMode: user.compactMode, snapToGrid: user.snapToGrid, showMinimap: user.showMinimap, uniformSize: user.uniformSize, showStatics: user.showStatics, easyConnect: user.easyConnect, connectionThickness: user.connectionThickness, routeMode: user.routeMode, uiZoom: user.uiZoom, panelOrder: user.panelOrder });
-        seedUserSettings(user.uiSettings ?? {});
+        seedUserSettings(user.uiSettings ?? {}, user.orgDefaults ?? {});
         // Push the now-canonical trackJumps from the hydrated user-settings
         // cache into the map store. (mapStore's init runs before /auth/me
         // resolves, so it pulled from localStorage only.)
@@ -210,17 +240,11 @@ function AppShell() {
   // Share links bypass the entire auth gate — a guest with the URL should
   // be able to load the map without ever seeing the landing page. Matched
   // (shareMatch is computed above) BEFORE the user/loading checks below.
-  if (shareMatch) return <SharedMapView token={shareMatch[1]} />;
+  if (shareMatch) return <Suspense fallback={<RouteLoading />}><SharedMapView token={shareMatch[1]} /></Suspense>;
 
-  if (loading) {
-    return (
-      <div className="loading-screen">
-        <img className="loading-screen__logo" src="/screen.png" alt="Nexum" />
-      </div>
-    );
-  }
+  if (loading) return <RouteLoading />;
 
-  if (!user) return <LandingPage />;
+  if (!user) return <Suspense fallback={<RouteLoading />}><LandingPage /></Suspense>;
 
   // Idle-locked: session is still valid, the UI is just paused. Rendering this
   // instead of the map unmounts the map (and its ESI polling); "Continue"
@@ -231,7 +255,7 @@ function AppShell() {
   // (corp/alliance) deployment; solo mode has no other users to manage, so the
   // section is hidden. The reports character is always allowed regardless.
   if (path.startsWith('/admin') && (user.canViewReports || (isAdminRole(user.role) && (user.corpMode || user.allianceMode)))) {
-    return <AdminPage />;
+    return <Suspense fallback={<RouteLoading />}><AdminPage /></Suspense>;
   }
 
   return <MapApp />;

@@ -15,6 +15,7 @@ import { config } from './config.js';
 import { migrate } from './migrate.js';
 import { systemsRouter } from './routes/systems.js';
 import { jumpPlansRouter } from './routes/jumpPlans.js';
+import { routePlansRouter } from './routes/routePlans.js';
 import { structuresRouter } from './routes/structures.js';
 import { sdeRouter } from './routes/sde.js';
 import { regionsRouter } from './routes/regions.js';
@@ -29,6 +30,7 @@ import insurgencyRouter  from './routes/insurgency.js';
 import stormsRouter       from './routes/storms.js';
 import scoutRouter        from './routes/scout.js';
 import routeRouter        from './routes/route.js';
+import { flagPresetsRouter } from './routes/flagPresets.js';
 import wormholesRouter    from './routes/wormholes.js';
 import releasesRouter     from './routes/releases.js';
 import { loadRouteGraph } from './services/routeGraph.js';
@@ -60,7 +62,10 @@ const PgStore = connectPgSimple(session);
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
-app.set('trust proxy', 1);
+// Number of proxies in front of us — see config.trustProxy. Express uses this
+// to pick the client's address out of X-Forwarded-For, which is what every
+// IP-keyed rate limit is bucketed on.
+app.set('trust proxy', config.trustProxy);
 app.disable('x-powered-by');
 
 // Default Helmet is safe for a JSON API: HSTS (HTTPS only), nosniff,
@@ -125,6 +130,7 @@ app.use('/api/telemetry', publicLimiter, telemetryRouter);
 app.use('/api/regions', appLimiter, regionsRouter);
 app.use('/api/maps', appLimiter, mapsRouter);
 app.use('/api/jump-plans', appLimiter, jumpPlansRouter);
+app.use('/api/route-plans', appLimiter, routePlansRouter);
 app.use('/api/structures', appLimiter, structuresRouter);
 // Public read-only share endpoint — no auth, validates the share_token
 // itself. Rate-limited under publicLimiter alongside other unauthed routes.
@@ -139,6 +145,7 @@ app.use('/api/insurgency',  esiLimiter, insurgencyRouter);
 app.use('/api/storms',      esiLimiter, stormsRouter);
 app.use('/api/scout',       esiLimiter, scoutRouter);
 app.use('/api/route',       esiLimiter, routeRouter);
+app.use('/api/flag-presets', appLimiter, flagPresetsRouter);
 app.use('/api/wormholes',   esiLimiter, wormholesRouter);
 app.use('/api/admin/reports',     appLimiter, reportsRouter);
 app.use('/api/admin',             appLimiter, adminReadRouter);

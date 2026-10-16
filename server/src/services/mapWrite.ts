@@ -3,6 +3,7 @@ import { publishToMap } from './mapEvents.js';
 import { syncSignature, syncAnomaly } from './crossMapSync.js';
 import { recordGhostSiteIfMatch } from './ghostSites.js';
 import { createLogger } from '../utils/logger.js';
+import { withMapRowLock } from './mapRowLock.js';
 
 const log = createLogger('map-write');
 
@@ -37,6 +38,10 @@ export interface SignatureInput {
   ghostType: string;
   massStatus: string;
   timeStatus: string;
+  /** Set only by the Thera/Turnur copy, to the eve-scout connection id this
+   *  row came from. Null everywhere else, which is what lets the cleanup tell
+   *  "we wrote this" from "a person wrote this". */
+  scoutConnectionId?: string | null;
 }
 
 // A signature carrying nothing at all — no scan id, no name, no notes, no
@@ -55,15 +60,32 @@ function logIfContentless(mapId: string, systemId: string, d: SignatureInput, ac
 
 export async function createSignature(mapId: string, systemId: string, d: SignatureInput, actor: WriteActor) {
   logIfContentless(mapId, systemId, d, actor);
-  const { rows } = await db.query(
-    `INSERT INTO map_signatures (system_id, sig_id, sig_type, name, notes, wh_type, wh_leads_to, ghost_type, mass_status, time_status, created_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-     RETURNING id, sig_id AS "sigId", sig_type AS "sigType", name, notes, wh_type AS "whType", wh_leads_to AS "whLeadsTo",
-               ghost_type AS "ghostType", mass_status AS "massStatus", time_status AS "timeStatus",
-               created_at AS "createdAt"`,
-    [systemId, d.sigId, d.sigType, d.name, d.notes, d.whType, d.whLeadsTo, d.ghostType,
-     d.massStatus, d.timeStatus, actor.userId],
-  );
+  // Returns the creator alongside the row. The client inserts this response
+  // straight into the open pane, and without the character the "added by"
+  // portrait stayed blank until something forced a re-fetch -- which looked
+  // like the row had no author rather than like a missing field.
+  // A CTE rather than a second round trip: the id is only known after the
+  // insert, and the join is on a user we already have the id for.
+  const rows = await withMapRowLock(mapId, async client => {
+    const { rows } = await client.query(
+      `WITH ins AS (
+       INSERT INTO map_signatures (system_id, sig_id, sig_type, name, notes, wh_type, wh_leads_to, ghost_type, mass_status, time_status, created_by_user_id,
+                                   scout_connection_id, scout_last_seen)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+               $12, CASE WHEN $12::text IS NULL THEN NULL ELSE NOW() END)
+       RETURNING *
+     )
+     SELECT ins.id, ins.sig_id AS "sigId", ins.sig_type AS "sigType", ins.name, ins.notes,
+            ins.wh_type AS "whType", ins.wh_leads_to AS "whLeadsTo",
+            ins.ghost_type AS "ghostType", ins.mass_status AS "massStatus",
+            ins.time_status AS "timeStatus", ins.created_at AS "createdAt",
+            u.character_name AS "createdByName", u.character_id AS "createdByCharId"
+        FROM ins LEFT JOIN users u ON u.id = ins.created_by_user_id`,
+      [systemId, d.sigId, d.sigType, d.name, d.notes, d.whType, d.whLeadsTo, d.ghostType,
+       d.massStatus, d.timeStatus, actor.userId, d.scoutConnectionId ?? null],
+    );
+    return rows;
+  });
   db.query(`INSERT INTO user_events (user_id, event_type, sig_type) VALUES ($1, 'signature', $2)`,
     [actor.userId, d.sigType]).catch(console.error);
   bumpActivity(systemId);
@@ -76,6 +98,9 @@ export async function createSignature(mapId: string, systemId: string, d: Signat
 const SIG_COLS: Record<string, string> = {
   sigId: 'sig_id', sigType: 'sig_type', name: 'name', notes: 'notes', whType: 'wh_type', whLeadsTo: 'wh_leads_to',
   ghostType: 'ghost_type', massStatus: 'mass_status', timeStatus: 'time_status',
+  // Re-copying a hole that is still listed refreshes both, which is what keeps
+  // the grace period meaningful: scout_last_seen is "the feed still had it".
+  scoutConnectionId: 'scout_connection_id',
 };
 
 // Updates the signature and returns flags the route uses to drive the K162
@@ -86,11 +111,6 @@ export async function updateSignature(
 ): Promise<{ dispatchK162: boolean; flushK162: boolean }> {
   const settingK162 = typeof updates.whType === 'string' && updates.whType.toUpperCase() === 'K162';
   let prevWasK162 = false;
-  if (settingK162) {
-    const { rows: prev } = await db.query<{ wh_type: string | null }>(
-      `SELECT wh_type FROM map_signatures WHERE id = $1 AND system_id = $2`, [sigId, systemId]);
-    prevWasK162 = (prev[0]?.wh_type ?? '').toUpperCase() === 'K162';
-  }
 
   // The other way a blank row can appear: an existing signature's scan id being
   // cleared. Only the ID input writes this, on every keystroke, so a legitimate
@@ -107,10 +127,29 @@ export async function updateSignature(
   for (const [key, col] of Object.entries(SIG_COLS)) {
     if (key in updates) { sets.push(`${col} = $${vals.length + 1}`); vals.push(updates[key]); }
   }
-  await db.query(
-    `UPDATE map_signatures SET ${sets.join(', ')} WHERE id = $${vals.length + 1} AND system_id = $${vals.length + 2} AND ${inThisMap(vals.length + 3)}`,
-    [...vals, sigId, systemId, mapId],
-  );
+  // Writing the provenance also stamps when the feed last confirmed the hole.
+  // Kept here rather than in SIG_COLS because the value is NOW(), not
+  // something the caller supplies.
+  if ('scoutConnectionId' in updates && updates.scoutConnectionId != null) {
+    sets.push('scout_last_seen = NOW()');
+  }
+  prevWasK162 = await withMapRowLock(mapId, async client => {
+    if (settingK162) {
+      const { rows: prev } = await client.query<{ wh_type: string | null }>(
+        `SELECT wh_type FROM map_signatures WHERE id = $1 AND system_id = $2`, [sigId, systemId]);
+      const wasK162 = (prev[0]?.wh_type ?? '').toUpperCase() === 'K162';
+      await client.query(
+        `UPDATE map_signatures SET ${sets.join(', ')} WHERE id = $${vals.length + 1} AND system_id = $${vals.length + 2} AND ${inThisMap(vals.length + 3)}`,
+        [...vals, sigId, systemId, mapId],
+      );
+      return wasK162;
+    }
+    await client.query(
+      `UPDATE map_signatures SET ${sets.join(', ')} WHERE id = $${vals.length + 1} AND system_id = $${vals.length + 2} AND ${inThisMap(vals.length + 3)}`,
+      [...vals, sigId, systemId, mapId],
+    );
+    return false;
+  });
   bumpActivity(systemId);
   if (typeof updates.name === 'string') recordGhostSiteIfMatch(systemId, updates.name);
   publishToMap(mapId, { type: 'sig.changed', actor: actor.clientId, systemId });
@@ -122,7 +161,9 @@ export async function updateSignature(
 }
 
 export async function deleteSignature(mapId: string, systemId: string, sigId: string, actor: WriteActor): Promise<void> {
-  await db.query(`DELETE FROM map_signatures WHERE id = $1 AND system_id = $2 AND ${inThisMap(3)}`, [sigId, systemId, mapId]);
+  await withMapRowLock(mapId, client => client.query(
+    `DELETE FROM map_signatures WHERE id = $1 AND system_id = $2 AND ${inThisMap(3)}`, [sigId, systemId, mapId],
+  ).then(() => undefined));
   bumpActivity(systemId);
   publishToMap(mapId, { type: 'sig.changed', actor: actor.clientId, systemId });
 }

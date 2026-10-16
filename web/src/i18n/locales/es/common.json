@@ -43,7 +43,8 @@
   "activity": {
     "thisHour": "esta hora",
     "allHidden": "Todos los gráficos ocultos. Actívalos en Opciones de mapa → Actividad.",
-    "loading": "Cargando actividad…"
+    "loading": "Cargando actividad…",
+    "peak": "máx. {{value}}"
   },
   "addSystem": {
     "title": "Añadir sistema",
@@ -72,7 +73,9 @@
       "maps": "Mapas",
       "reports": "Informes",
       "discord": "Discord",
-      "audit": "Registro de auditoría"
+      "audit": "Registro de auditoría",
+      "flags": "Plantillas",
+      "defaults": "Diseño por defecto"
     },
     "access": {
       "title": "Acceso de inicio de sesión",
@@ -362,6 +365,35 @@
       "colAmount": "Cantidad",
       "assign": "Asignar",
       "assignPlaceholder": "ID de personaje"
+    },
+    "flags": {
+      "title": "Plantillas de marca",
+      "hintCorp": "Plantillas que cada miembro de tu corporación ve encima de las suyas, para que un icono signifique lo mismo para todos. Hasta {{max}}.",
+      "hintAlliance": "Plantillas que cada miembro de tu alianza ve encima de las suyas, para que un icono signifique lo mismo para todos. Hasta {{max}}.",
+      "noCorp": "Esta instalación no tiene corporación ni alianza, así que no hay con quién estandarizar.",
+      "saving": "Guardando…",
+      "saved": "Guardado",
+      "loadFailed": "No se pudieron cargar las plantillas.",
+      "saveFailed": "No se pudieron guardar las plantillas."
+    },
+    "defaults": {
+      "title": "Diseño por defecto",
+      "hintCorp": "La configuración con la que empieza cada miembro de tu corporación. Organiza tu propio diseño y guárdalo aquí.",
+      "hintAlliance": "La configuración con la que empieza cada miembro de tu alianza. Organiza tu propio diseño y guárdalo aquí.",
+      "limitExisting": "Los miembros heredan cualquier ajuste que nunca hayan cambiado. Lo que ya hayan configurado sigue siendo suyo. El orden de paneles, el zoom y las demás opciones de visualización solo se aplican a miembros nuevos.",
+      "limitSession": "Los miembros ya conectados verán el cambio la próxima vez que inicien sesión.",
+      "noCorp": "Esta instalación no tiene corporación ni alianza, así que no hay para quién definir ajustes.",
+      "none": "Aún no hay ajustes por defecto.",
+      "summary": "{{count}} ajustes guardados",
+      "lastSet": "Definido por {{who}} el {{when}}",
+      "showList": "Ver qué incluye",
+      "hideList": "Ocultar la lista",
+      "capture": "Guardar mi diseño actual como predeterminado",
+      "clear": "Borrar ajustes",
+      "saving": "Guardando…",
+      "saved": "Guardado",
+      "loadFailed": "No se pudieron cargar los ajustes.",
+      "saveFailed": "No se pudieron guardar los ajustes."
     }
   },
   "anomType": {
@@ -443,13 +475,18 @@
     "disabled": "Claves API desactivadas"
   },
   "chainExits": {
+    "title": "Salidas de la cadena",
     "noExits": "No hay salidas de K-space en esta cadena.",
     "hint": "Sistemas de K-space actualmente en el mapa, por clase de seguridad. La ruta a Jita es solo por puertas — los atajos por agujero de gusano no se cuentan.",
+    "allExits": "Todas las salidas a K-space",
+    "noFavourites": "Aún no hay sistemas favoritos: añade algunos en el panel Sistemas cercanos.",
+    "noRoute": "sin ruta",
+    "inChain": "en la cadena",
+    "via": "vía",
     "highSec": "High-sec",
     "lowSec": "Low-sec",
     "nullSec": "Null-sec",
-    "nearestJita": "Jita más cercano:",
-    "via": "vía"
+    "nearestJita": "Jita más cercano:"
   },
   "chains": {
     "from": "Desde…",
@@ -493,7 +530,9 @@
     "signIn": "Inicia sesión y atraca en K-space para ver los saltos a los hubs, o activa las opciones de atajos de ruta para calcular rutas desde un agujero de gusano o Thera.",
     "searchPlaceholder": "Buscar nombre de sistema…",
     "onList": "en la lista",
-    "noMatch": "Ningún sistema coincide con «{{query}}»"
+    "noMatch": "Ningún sistema coincide con «{{query}}»",
+    "allMaps": "Calcular en todos mis mapas",
+    "allMapsHint": "Las distancias pueden usar las cadenas de agujeros de gusano de cualquier mapa que puedas ver, no solo el abierto. Desactívalo para enrutar únicamente por el mapa en pantalla."
   },
   "commandPalette": {
     "placeholder": "Buscar sistemas y mapas…",
@@ -687,6 +726,7 @@
     "removeSystem": "Quitar sistema",
     "connectTo": "Conectar con sistema…",
     "connectToHint": "Haz clic en el sistema al que conectar {{system}} — Esc para cancelar",
+    "addConnected": "Añadir sistema conectado…",
     "connectToDone": "{{from}} conectado con {{to}}",
     "removeSystems": "Quitar {{count}} sistemas",
     "addSystem": "Añadir sistema",
@@ -713,7 +753,8 @@
     "clearTag": "Quitar marca",
     "jumpRangeFrom": "Alcance de salto desde aquí",
     "jumpCyno": "Salto cyno",
-    "jumpRangeClear": "Borrar alcance de salto"
+    "jumpRangeClear": "Borrar alcance de salto",
+    "copyName": "Copiar nombre del sistema"
   },
   "customIntel": {
     "title": "Intel personalizada",
@@ -1187,7 +1228,7 @@
     },
     "forCorpsBody": "Ejecuta Nexum como un despliegue compartido para tu corp o alianza. Los miembros obtienen mapas de cadena visibles para la corp y mapas personales privados en una sola herramienta, con permisos basados en roles, herramientas de administración e informes de actividad por personaje.",
     "compareBody": "Descubre cómo se compara Nexum con Pathfinder, Tripwire y Wanderer — funciones, alojamiento y coste, lado a lado.",
-    "languagesBody": "Nexum está totalmente traducido a nueve idiomas — y detecta el tuyo automáticamente desde tu navegador la primera vez que lo visitas. ¿Prefieres otro? Cámbialo cuando quieras desde el selector de idioma en la barra de herramientas.",
+    "languagesBody": "Nexum está totalmente traducido a diez idiomas — y detecta el tuyo automáticamente desde tu navegador la primera vez que lo visitas. ¿Prefieres otro? Cámbialo cuando quieras desde el selector de idioma en la barra de herramientas.",
     "compareLink": "Comparar Nexum vs Pathfinder, Tripwire y Wanderer →",
     "helpLink": "¿Nuevo por aquí? Lee la guía →",
     "guidesLink": "Guías y tutoriales de agujeros de gusano →",
@@ -1326,10 +1367,13 @@
     "shareCount": "Compartir con {{count}}",
     "batchShared": "Mapa compartido con {{count}}.",
     "batchPartial": "Compartido con {{shared}}; {{skipped}} omitido(s).",
-    "batchNone": "No se pudo compartir — {{count}} omitido(s)."
+    "batchNone": "No se pudo compartir — {{count}} omitido(s).",
+    "optedOut": "{{count}} han ocultado este mapa de su propia lista. Siguen teniendo acceso: un recurso compartido de corporación o alianza no se puede abandonar individualmente."
   },
   "mapSidebar": {
     "activityHint": "Mostrar gráficos de lo siguiente:",
+    "activityCombined": "Combinar en un solo gráfico",
+    "activityCombinedHint": "Unos mismos ejes para todas las métricas, cada una escalada a su propio máximo de 24 h. Los valores exactos aparecen al pasar el cursor.",
     "activityJumps": "Saltos",
     "activityNpcDelta": "Delta de PNJ",
     "activityNpcKills": "PNJ destruidos",
@@ -1349,7 +1393,7 @@
       "announce": "Anunciar:",
       "evConnect": "Conexión / desconexión de personaje",
       "evIncursions": "Incursiones dentro del alcance",
-      "evLawless": "Sistemas sin ley dentro del alcance",
+      "evLawless": "Low-sec / null-sec dentro del alcance",
       "evKills": "Naves destruidas recientes dentro del alcance",
       "evNewChain": "Nueva cadena añadida por otros",
       "threshold": "«Dentro del alcance» usa el umbral de las alertas de proximidad.",
@@ -1395,6 +1439,13 @@
     "fleetHeatmap": "Mapa de calor de flota",
     "fleetHint": "Muestra a los compañeros de flota como puntos morados en el sistema en el que están. Pasa el ratón por un punto para ver los nombres.",
     "fontSize": "Tamaño de fuente",
+    "density": "Densidad de la interfaz",
+    "densityHint": "Espaciado alrededor del texto de los paneles. El tamaño de fuente es independiente, así que puedes mantener texto grande en una interfaz más compacta.",
+    "densityOptions": {
+      "comfortable": "Cómoda",
+      "compact": "Compacta",
+      "dense": "Densa"
+    },
     "heatIntensity": "Intensidad",
     "heatmap": "Mapa de calor",
     "heatmapOptions": {
@@ -1477,6 +1528,7 @@
     "panelBelow": "Debajo del mapa",
     "panelBeside": "Junto al mapa",
     "panelLayout": "Diseño del panel",
+    "panelLayoutTooltip": "Dónde se sitúa el panel de sistema: debajo del mapa o al lado, como una columna alta a la derecha.",
     "patchNotesEmpty": "Aún no hay notas de versión.",
     "patchNotesFailed": "No se pudieron cargar las notas.",
     "patchNotesNoNotes": "Sin notas para esta versión.",
@@ -1527,7 +1579,6 @@
       "tracking": "Seguimiento",
       "route": "Ruta",
       "chains": "Cadenas",
-      "chainExits": "Salidas de la cadena",
       "proximityAlerts": "Alertas de proximidad",
       "activity": "Actividad",
       "fleet": "Flota",
@@ -1539,7 +1590,8 @@
       "shortcuts": "Atajos",
       "notifications": "Notificaciones",
       "announcer": "Anuncios de voz",
-      "jumpRange": "Alcance de salto"
+      "jumpRange": "Alcance de salto",
+      "chainExits": "Salidas de la cadena"
     },
     "settings": "Ajustes",
     "shareActiveHint": "Enlace de compartir en vivo. Cambia abajo lo que ven los invitados. Si ya se generó un enlace, los cambios surten efecto automáticamente y NO necesitas regenerarlo.",
@@ -1592,7 +1644,9 @@
     "updateShareFailed": "No se pudieron actualizar las opciones de compartir",
     "version": "Versión",
     "wandererImported": "Importado desde Wanderer: {{systems}} sistemas, {{connections}} conexiones ({{skipped}} omitidos).",
-    "working": "Procesando…"
+    "working": "Procesando…",
+    "panelColumns": "Columnas de paneles",
+    "panelColumnsTooltip": "Divide los paneles en columnas paralelas, para que las notas o el killboard queden junto a las firmas en lugar de debajo."
   },
   "mass": {
     "billionKg": "{{value}} mil M kg",
@@ -1687,7 +1741,8 @@
     "riskCritical": "Masa crítica",
     "riskFrig": "Agujero de fragata",
     "jspaceNoWaypoint": "Los sistemas de agujero de gusano no se pueden establecer como destino del piloto automático.",
-    "viaAnsiblex": "Puerta de salto Ansiblex"
+    "viaAnsiblex": "Puerta de salto Ansiblex",
+    "viaMap": "en {{map}}"
   },
   "routeToast": {
     "destinationSet": "Destino establecido en {{system}}",
@@ -1706,7 +1761,16 @@
     "inSigHint": "ID de firma en {{system}}: el extremo lejano del agujero",
     "outSigHint": "ID de firma en {{system}}: el extremo al que warpeas desde aquí",
     "markExpired": "Informar de que este agujero ha colapsado",
-    "unmarkExpired": "No ha colapsado"
+    "unmarkExpired": "No ha colapsado",
+    "copyAll": "Copiar {{count}} al mapa",
+    "copyAllHint": "Añade las firmas de cada conexión de {{system}} cuyo sistema esté en el mapa",
+    "copyOne": "Copiar las firmas de esta conexión al mapa",
+    "copyNothing": "Nada que copiar: esas firmas ya están en el mapa",
+    "copyDone": "Firmas: {{added}} añadidas, {{updated}} actualizadas",
+    "copyPartial": "{{added}} añadidas, {{failed}} fallidas",
+    "copyFailed": "No se pudieron copiar las firmas",
+    "copyDoneLinks": "Firmas: {{added}} añadidas, {{updated}} actualizadas · {{links}} conexión(es) creada(s)",
+    "copyDoneSwept": "Firmas: {{added}} añadidas, {{updated}} actualizadas · {{removed}} agujero(s) colapsado(s) eliminados"
   },
   "session": {
     "idleLogout": "Sesión cerrada por inactividad.",
@@ -1746,7 +1810,8 @@
     "panelsTitle": "Secciones de la barra lateral",
     "panelsHint": "Elige qué secciones aparecen en la barra lateral. Las ocultas conservan su posición y vuelven a ella al reactivarlas.",
     "panelsAllHidden": "Todas las secciones están ocultas: la barra lateral quedará vacía.",
-    "emptyTitle": "No se muestra ninguna sección. Elige aquí las que quieras."
+    "emptyTitle": "No se muestra ninguna sección. Elige aquí las que quieras.",
+    "routePlanner": "Planificador de rutas"
   },
   "sigType": {
     "combat": "Combate",
@@ -1803,7 +1868,11 @@
     "colSafe": "Seguro",
     "safeYes": "Seguro — sin combate",
     "safeNo": "No seguro — puede generar enemigos",
-    "safeHint": "Seguridad de sitios de reliquia/datos"
+    "safeHint": "Seguridad de sitios de reliquia/datos",
+    "countFiltered": "{{shown}} de {{total}}",
+    "countTotal": "Firmas totales: {{count}}",
+    "countHint": "Firmas en este sistema",
+    "countFilteredHint": "Firmas mostradas del total del sistema"
   },
   "stats": {
     "title": "Estadísticas de usuario",
@@ -1898,7 +1967,13 @@
     "standingValue": "{{label}}: {{value}}",
     "panesTitle": "Paneles",
     "panesHint": "Elige qué paneles aparecen abajo. Los ocultos conservan su posición y vuelven a ella al reactivarlos.",
-    "openAnoikis": "Abrir en anoik.is"
+    "openAnoikis": "Abrir en anoik.is",
+    "moveLeft": "Mover a la columna anterior",
+    "moveRight": "Mover a la columna siguiente",
+    "resizeColumns": "Arrastra para ajustar el ancho de las columnas; doble clic para igualarlas",
+    "copyName": "Copiar nombre del sistema",
+    "nameCopied": "{{name}} copiado",
+    "copyFailed": "No se pudo copiar: selecciónalo y cópialo manualmente."
   },
   "time": {
     "justNow": "ahora mismo",
@@ -1926,8 +2001,6 @@
     "getMoreMaps": "+ Obtener más mapas",
     "help": "Ayuda y guía",
     "lastKnownSystem": "Último sistema conocido",
-    "layoutBelowTooltip": "El panel está debajo del mapa: cambiar a un lado",
-    "layoutBesideTooltip": "El panel está junto al mapa: cambiar a debajo",
     "leaveMapConfirm": "¿Quitar «{{name}}» de tu lista? El propietario puede volver a compartirlo más tarde.",
     "leaveThisMap": "Salir del mapa compartido",
     "locked": "Bloqueado",
@@ -1971,7 +2044,12 @@
     "trackJumpsTooltipOn": "Siguiendo saltos — se añaden nuevos sistemas a medida que te mueves",
     "updateAvailable": "Actualización disponible",
     "updateAvailableVersion": "Actualización disponible: v{{version}}",
-    "userStats": "Estadísticas de usuario"
+    "userStats": "Estadísticas de usuario",
+    "hideThisMap": "Ocultar de mi lista",
+    "hideThisMapHint": "Quita este mapa solo de tu selector. Se compartió con tu corporación o alianza, así que no hay un acceso personal al que renunciar: los demás lo conservan. Puedes restaurarlo aquí.",
+    "hiddenMaps": "Mapas ocultos ({{count}})",
+    "unhideMap": "restaurar",
+    "unhideMapHint": "Volver a mostrar este mapa en tu lista"
   },
   "units": {
     "jumps_one": "{{count}} salto",
@@ -2074,7 +2152,8 @@
     "searchPlaceholder": "Buscar…",
     "connectedSystems": "Sistemas conectados",
     "other": "Otros",
-    "inbound": "entrante"
+    "inbound": "entrante",
+    "exactClass": "Clase exacta"
   },
   "exits": {
     "notifTitle": "Salida a k-space",
@@ -2101,5 +2180,35 @@
     "imported": "Importados {{systems}} sistemas, {{connections}} conexiones y {{signatures}} firmas desde Tripwire",
     "importedWithNotes": "Importados {{systems}} sistemas, {{connections}} conexiones, {{signatures}} firmas y notas de {{notes}} sistemas desde Tripwire",
     "notTripwireData": "Esto no parece datos de cadena de Tripwire: no contiene firmas"
+  },
+  "routePlanner": {
+    "from": "Desde",
+    "to": "Hasta",
+    "searchSystem": "Buscar un sistema…",
+    "searching": "Buscando…",
+    "clearField": "Borrar",
+    "useMyLocation": "Usar mi ubicación actual",
+    "swap": "Intercambiar origen y destino",
+    "followingLocation": "Desde {{system}} — tu ubicación actual",
+    "pickBoth": "Elige un sistema de origen y uno de destino para planear una ruta.",
+    "sameSystem": "El origen y el destino son el mismo sistema.",
+    "noRoute": "No se encontró ruta entre esos sistemas.",
+    "savedHdr": "Rutas guardadas",
+    "savedEmpty": "Ninguna todavía: planea una ruta, ponle nombre abajo y pulsa Guardar.",
+    "nameToSave": "Nombre para guardar…",
+    "save": "Guardar",
+    "loadPlan": "Cargar esta ruta",
+    "deletePlan": "Eliminar esta ruta"
+  },
+  "flagPresets": {
+    "title": "Plantillas de marca",
+    "hint": "Combinaciones guardadas de icono, color y nombre que puedes aplicar a una conexión con un clic.",
+    "newItem": "Nueva plantilla",
+    "add": "Añadir plantilla",
+    "remove": "Eliminar plantilla",
+    "pickIcon": "Elegir icono",
+    "max": "Hasta {{count}} plantillas",
+    "orgGroup": "Organización",
+    "mineGroup": "Mías"
   }
 }

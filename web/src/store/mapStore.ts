@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { readUserSetting, writeUserSetting } from '../hooks/useUserSetting';
 import { v4 as uuid } from 'uuid';
 import { api } from '../api/client';
+import { inferredSize } from '../utils/wormholeSize';
+import { wormholeTypesSnapshot } from '../hooks/useWormholeTypes';
 import { enqueue, isPermanentRejection } from './pendingQueue';
 import { toast } from '../utils/toastStore';
 import type { WormholeMap, MapSystem, MapConnection, SavedRoute, SystemClass, WormholeEffect } from '../types';
@@ -158,6 +160,9 @@ export interface MapListItem {
   /** True when the caller has a CHARACTER-scoped share grant they can self-remove
    *  ("leave the share"). False for corp/alliance grants (org-owned — admin only). */
   canLeaveShare?: boolean;
+  /** This account has taken an org-shared map off its own list. The map stays
+   *  in the payload so the switcher can offer a way back. */
+  hiddenByMe?: boolean;
   locked: boolean;
   /** Owning character's name — shown in the merge picker to disambiguate maps. */
   ownerName?: string | null;
@@ -312,6 +317,7 @@ interface MapStore {
   createFromRegion: (regionId: number, name: string, isCorpMap: boolean, isAllianceMap?: boolean, skipKspace?: boolean) => Promise<void>;
   deleteMap: (id: string) => Promise<void>;
   leaveShare: (id: string) => Promise<void>;
+  restoreShare: (id: string) => Promise<void>;
 
   // Map metadata
   setMapName: (name: string) => void;
@@ -331,7 +337,10 @@ interface MapStore {
   moveSystem: (id: string, position: { x: number; y: number }, opts?: { skipUndo?: boolean }) => void;
 
   // Connections
-  addConnection: (sourceId: string, targetId: string, sourceHandle?: string | null, targetHandle?: string | null) => string;
+  /** `init` seeds fields on the new connection. They go into the create POST
+   *  itself: the POST is deferred until both endpoints exist, so a follow-up
+   *  updateConnection can reach the server first and be dropped. */
+  addConnection: (sourceId: string, targetId: string, sourceHandle?: string | null, targetHandle?: string | null, init?: Partial<Omit<MapConnection, 'id' | 'sourceId' | 'targetId'>>) => string;
   updateConnection: (id: string, updates: Partial<Omit<MapConnection, 'id'>>) => void;
   removeConnection: (id: string) => void;
   // Re-route every connection's handles to the nearest sides given current
@@ -353,6 +362,11 @@ interface MapStore {
   // system's signatures/structures. The open pane watches its system's value
   // and re-fetches when it ticks (sigs/structures live in pane state, not here).
   sigRev: Record<string, number>;
+  /** Mark a system's signatures as changed by THIS client, so an open pane
+   *  re-fetches. The SSE path deliberately skips the originating client to
+   *  avoid an echo, which leaves a write made outside the pane (copying the
+   *  Thera/Turnur exits in) invisible until the system is re-selected. */
+  bumpSigRev: (systemId: string) => void;
   structRev: Record<string, number>;
   anomRev: Record<string, number>;
 
@@ -627,6 +641,8 @@ export const useMapStore = create<MapStore>()((set, get) => {
     routeHighlight: null,
     routeOrigin: null,
     sigRev: {},
+    bumpSigRev: (systemId) =>
+      set((s) => ({ sigRev: { ...s.sigRev, [systemId]: (s.sigRev[systemId] ?? 0) + 1 } })),
     structRev: {},
     anomRev: {},
     sigTypesBySystem: {},
@@ -808,16 +824,30 @@ export const useMapStore = create<MapStore>()((set, get) => {
     // owner and everyone else. Local cleanup mirrors deleteMap (remove from the
     // list, switch away if it was active).
     leaveShare: async (id) => {
-      await api(`/api/maps/${id}/shares/mine`, { method: 'DELETE' });
-      const remaining = get().maps.filter((m) => m.id !== id);
-      set({ maps: remaining });
+      // Two outcomes, decided server-side by which kind of grant it was. A
+      // personal grant is deleted and the map is gone from the list; an org
+      // grant cannot be (it belongs to everyone in the corp), so the account's
+      // opt-out is recorded and the map stays in the payload flagged hidden —
+      // which is what lets the switcher offer it back.
+      const r = await api<{ ok: boolean; kind?: string }>(
+        `/api/maps/${id}/shares/mine`, { method: 'DELETE' });
+      const optedOut = r?.kind === 'opted-out';
+      set({
+        maps: optedOut
+          ? get().maps.map((m) => (m.id === id ? { ...m, hiddenByMe: true } : m))
+          : get().maps.filter((m) => m.id !== id),
+      });
+      // Either way it should stop being the map on screen.
       if (get().activeMapId === id) {
-        if (remaining.length > 0) {
-          await get().switchMap(remaining[0].id);
-        } else {
-          set({ map: emptyMap(), activeMapId: null });
-        }
+        const next = get().maps.find((m) => m.id !== id && !m.hiddenByMe);
+        if (next) await get().switchMap(next.id);
+        else set({ map: emptyMap(), activeMapId: null });
       }
+    },
+
+    restoreShare: async (id) => {
+      await api(`/api/maps/${id}/shares/mine/restore`, { method: 'POST' });
+      set({ maps: get().maps.map((m) => (m.id === id ? { ...m, hiddenByMe: false } : m)) });
     },
 
     // ── Map metadata ──────────────────────────────────────────────────────────
@@ -1079,6 +1109,27 @@ export const useMapStore = create<MapStore>()((set, get) => {
           systems: s.map.systems.map((sys) => (sys.id === id ? { ...sys, ...updates } : sys)),
         },
       }));
+
+      // A system's class can arrive AFTER the holes touching it already have a
+      // type -- jumping into an unresolved placeholder names the system first
+      // and classifies it a moment later. Size depends on both ends (a hole
+      // touching a C1 caps at medium), so re-derive this system's connections
+      // once its class is known, or that cap would only ever be applied by
+      // opening the connection panel.
+      if (typeof updates.systemClass === 'string') {
+        const after = get().map;
+        for (const c of after.connections) {
+          if (c.sourceId !== id && c.targetId !== id) continue;
+          if (c.connectionType !== 'standard' || !c.type) continue;
+          const a = after.systems.find((sy) => sy.id === c.sourceId);
+          const b = after.systems.find((sy) => sy.id === c.targetId);
+          const size = inferredSize({
+            code: c.type, whTypes: wormholeTypesSnapshot(),
+            currentSize: c.size, classA: a?.systemClass, classB: b?.systemClass,
+          });
+          if (size && size !== c.size) get().updateConnection(c.id, { size });
+        }
+      }
       if (activeMapId) {
         const url  = `/api/maps/${activeMapId}/systems/${id}`;
         const body = JSON.stringify(updates);
@@ -1157,7 +1208,7 @@ export const useMapStore = create<MapStore>()((set, get) => {
 
     // ── Connections ───────────────────────────────────────────────────────────
 
-    addConnection: (sourceId, targetId, sourceHandle = null, targetHandle = null) => {
+    addConnection: (sourceId, targetId, sourceHandle = null, targetHandle = null, init) => {
       const { activeMapId } = get();
       const id = uuid();
 
@@ -1180,7 +1231,8 @@ export const useMapStore = create<MapStore>()((set, get) => {
                 massUsed: 0, eolAt: null,
                 sourceSignatureId: null, targetSignatureId: null, broken: false,
                 flagIcon: null, flagNote: null, flagBlink: false, flagColor: null,
-                createdAt: new Date().toISOString() },
+                createdAt: new Date().toISOString(),
+                ...init },
             ],
           },
         };
@@ -1247,6 +1299,30 @@ export const useMapStore = create<MapStore>()((set, get) => {
     updateConnection: (id, updates) => {
       const { activeMapId, map } = get();
       const conn = map.connections.find((c) => c.id === id);
+
+      // Size follows from the wormhole type, so derive it HERE rather than in
+      // the connection panel. It used to be inferred only while that panel was
+      // open, which is why a freshly jumped hole sat at the 'large' default
+      // until somebody happened to click it -- a frigate hole could show L for
+      // the whole session and then "snap" on reload.
+      //
+      // Only when the type is what changed, and only when the caller has not
+      // set a size itself (the Thera/Turnur copy knows the feed's size and
+      // should win). Unknown or not-yet-loaded types yield null and leave the
+      // size alone, so this degrades to today's behaviour rather than guessing.
+      if (conn && typeof updates.type === 'string' && updates.size === undefined) {
+        const src = map.systems.find((sy) => sy.id === conn.sourceId);
+        const tgt = map.systems.find((sy) => sy.id === conn.targetId);
+        const size = inferredSize({
+          code: updates.type,
+          whTypes: wormholeTypesSnapshot(),
+          currentSize: updates.size ?? conn.size,
+          classA: src?.systemClass,
+          classB: tgt?.systemClass,
+        });
+        if (size && size !== conn.size) updates = { ...updates, size };
+      }
+
       if (conn) {
         const prev: Partial<MapConnection> = {};
         for (const key of Object.keys(updates) as Array<keyof typeof updates>) {
