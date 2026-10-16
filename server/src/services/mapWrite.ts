@@ -3,6 +3,7 @@ import { publishToMap } from './mapEvents.js';
 import { syncSignature, syncAnomaly } from './crossMapSync.js';
 import { recordGhostSiteIfMatch } from './ghostSites.js';
 import { createLogger } from '../utils/logger.js';
+import { withMapRowLock } from './mapRowLock.js';
 
 const log = createLogger('map-write');
 
@@ -65,8 +66,9 @@ export async function createSignature(mapId: string, systemId: string, d: Signat
   // like the row had no author rather than like a missing field.
   // A CTE rather than a second round trip: the id is only known after the
   // insert, and the join is on a user we already have the id for.
-  const { rows } = await db.query(
-    `WITH ins AS (
+  const rows = await withMapRowLock(mapId, async client => {
+    const { rows } = await client.query(
+      `WITH ins AS (
        INSERT INTO map_signatures (system_id, sig_id, sig_type, name, notes, wh_type, wh_leads_to, ghost_type, mass_status, time_status, created_by_user_id,
                                    scout_connection_id, scout_last_seen)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
@@ -78,10 +80,12 @@ export async function createSignature(mapId: string, systemId: string, d: Signat
             ins.ghost_type AS "ghostType", ins.mass_status AS "massStatus",
             ins.time_status AS "timeStatus", ins.created_at AS "createdAt",
             u.character_name AS "createdByName", u.character_id AS "createdByCharId"
-       FROM ins LEFT JOIN users u ON u.id = ins.created_by_user_id`,
-    [systemId, d.sigId, d.sigType, d.name, d.notes, d.whType, d.whLeadsTo, d.ghostType,
-     d.massStatus, d.timeStatus, actor.userId, d.scoutConnectionId ?? null],
-  );
+        FROM ins LEFT JOIN users u ON u.id = ins.created_by_user_id`,
+      [systemId, d.sigId, d.sigType, d.name, d.notes, d.whType, d.whLeadsTo, d.ghostType,
+       d.massStatus, d.timeStatus, actor.userId, d.scoutConnectionId ?? null],
+    );
+    return rows;
+  });
   db.query(`INSERT INTO user_events (user_id, event_type, sig_type) VALUES ($1, 'signature', $2)`,
     [actor.userId, d.sigType]).catch(console.error);
   bumpActivity(systemId);
@@ -107,11 +111,6 @@ export async function updateSignature(
 ): Promise<{ dispatchK162: boolean; flushK162: boolean }> {
   const settingK162 = typeof updates.whType === 'string' && updates.whType.toUpperCase() === 'K162';
   let prevWasK162 = false;
-  if (settingK162) {
-    const { rows: prev } = await db.query<{ wh_type: string | null }>(
-      `SELECT wh_type FROM map_signatures WHERE id = $1 AND system_id = $2`, [sigId, systemId]);
-    prevWasK162 = (prev[0]?.wh_type ?? '').toUpperCase() === 'K162';
-  }
 
   // The other way a blank row can appear: an existing signature's scan id being
   // cleared. Only the ID input writes this, on every keystroke, so a legitimate
@@ -134,10 +133,23 @@ export async function updateSignature(
   if ('scoutConnectionId' in updates && updates.scoutConnectionId != null) {
     sets.push('scout_last_seen = NOW()');
   }
-  await db.query(
-    `UPDATE map_signatures SET ${sets.join(', ')} WHERE id = $${vals.length + 1} AND system_id = $${vals.length + 2} AND ${inThisMap(vals.length + 3)}`,
-    [...vals, sigId, systemId, mapId],
-  );
+  prevWasK162 = await withMapRowLock(mapId, async client => {
+    if (settingK162) {
+      const { rows: prev } = await client.query<{ wh_type: string | null }>(
+        `SELECT wh_type FROM map_signatures WHERE id = $1 AND system_id = $2`, [sigId, systemId]);
+      const wasK162 = (prev[0]?.wh_type ?? '').toUpperCase() === 'K162';
+      await client.query(
+        `UPDATE map_signatures SET ${sets.join(', ')} WHERE id = $${vals.length + 1} AND system_id = $${vals.length + 2} AND ${inThisMap(vals.length + 3)}`,
+        [...vals, sigId, systemId, mapId],
+      );
+      return wasK162;
+    }
+    await client.query(
+      `UPDATE map_signatures SET ${sets.join(', ')} WHERE id = $${vals.length + 1} AND system_id = $${vals.length + 2} AND ${inThisMap(vals.length + 3)}`,
+      [...vals, sigId, systemId, mapId],
+    );
+    return false;
+  });
   bumpActivity(systemId);
   if (typeof updates.name === 'string') recordGhostSiteIfMatch(systemId, updates.name);
   publishToMap(mapId, { type: 'sig.changed', actor: actor.clientId, systemId });
@@ -149,7 +161,9 @@ export async function updateSignature(
 }
 
 export async function deleteSignature(mapId: string, systemId: string, sigId: string, actor: WriteActor): Promise<void> {
-  await db.query(`DELETE FROM map_signatures WHERE id = $1 AND system_id = $2 AND ${inThisMap(3)}`, [sigId, systemId, mapId]);
+  await withMapRowLock(mapId, client => client.query(
+    `DELETE FROM map_signatures WHERE id = $1 AND system_id = $2 AND ${inThisMap(3)}`, [sigId, systemId, mapId],
+  ).then(() => undefined));
   bumpActivity(systemId);
   publishToMap(mapId, { type: 'sig.changed', actor: actor.clientId, systemId });
 }

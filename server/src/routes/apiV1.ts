@@ -4,7 +4,7 @@ import { apiKeyAuth } from '../middleware/apiKeyAuth.js';
 import { authUser, canEditTopology, isAdmin, isAllianceAdmin } from '../middleware/authContext.js';
 import { getMapAccess, requireMapContentWrite, dispatchK162, flushK162, resolveStructureOwnerCorp } from './maps.js';
 import { streamMapEvents } from '../services/mapStream.js';
-import { MapLockedError, TopologyCheckpointConflict, reconcileWormholesystemsTopology, validateWormholesystemsTopology } from '../services/wormholesystemsTopology.js';
+import { MapLockedError, TopologyAccessError, TopologyCheckpointConflict, reconcileWormholesystemsTopology, validateWormholesystemsTopology } from '../services/wormholesystemsTopology.js';
 import {
   listVisibleMaps, loadFullMap, isSystemInMap,
   loadSystemSignatures, loadSystemAnomalies, loadSystemStructures,
@@ -152,9 +152,10 @@ apiV1Router.put('/maps/:mapId/wormholesystems/topology', async (req, res) => {
     res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid topology payload' }); return;
   }
   try {
-    res.json(await reconcileWormholesystemsTopology(mapId, req.body, actor.role));
+    res.json(await reconcileWormholesystemsTopology(mapId, req.body, actor));
   } catch (error) {
     if (error instanceof MapLockedError) { res.status(403).json({ error: error.message }); return; }
+    if (error instanceof TopologyAccessError) { res.status(error.status).json({ error: error.message }); return; }
     if (error instanceof TopologyCheckpointConflict) { res.status(409).json({ error: error.message }); return; }
     throw error;
   }

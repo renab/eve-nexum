@@ -71,6 +71,7 @@ export async function apiKeyAuth(req: Request, res: Response, next: NextFunction
       allianceId:    row.allianceId,
       apiScope:      scope,
       apiScopeMapId: row.scopeMapId,
+      apiTokenId:    row.id,
     };
 
     // Best-effort, throttled last_used_at bump — never blocks the request.
