@@ -347,6 +347,7 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
     );
     const ownedSystemBySource = new Map(ownedSystems.rows.map(row => [String(row.source_item_id), row]));
     const sourceToRow = new Map<string, string>();
+    const conflictedOwnedSystemRowIds = new Set<string>();
     for (const system of input.systems) {
       const sdeRow = sdeById.get(system.eveSystemId)!;
       const hasPosition = system.positionX !== null && system.positionY !== null;
@@ -400,6 +401,7 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
       if (existing.rows.length > 1) { result.conflicts.push({ itemId: system.sourceSystemId, reason: 'multiple target systems have this EVE identity' }); continue; }
       if (existing.rows.length === 1) {
         if (ownedSystems.rows.some(owner => owner.row_id === existing.rows[0].id)) {
+          conflictedOwnedSystemRowIds.add(String(existing.rows[0].id));
           result.conflicts.push({ itemId: system.sourceSystemId, reason: 'source identity changed for an already-owned system; preserved' }); continue;
         }
         result.preservedSystems++;
@@ -435,9 +437,11 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
     const conflictedSourceSystemIds = new Set(input.systems
       .filter(system => !sourceToRow.has(system.sourceSystemId))
       .map(system => system.sourceSystemId));
-    const conflictedOwnedSystemRowIds = new Set(ownedSystems.rows
-      .filter(owned => conflictedSourceSystemIds.has(String(owned.source_item_id)))
-      .map(owned => String(owned.row_id)));
+    for (const owned of ownedSystems.rows) {
+      if (conflictedSourceSystemIds.has(String(owned.source_item_id))) {
+        conflictedOwnedSystemRowIds.add(String(owned.row_id));
+      }
+    }
 
     const signatureToRow = new Map<string, { rowId: string; systemId: string; ownership: 'owned' | 'preserved'; compatible: boolean }>();
     const changedSignatureSystems = new Set<string>();
