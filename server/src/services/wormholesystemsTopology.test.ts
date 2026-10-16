@@ -106,6 +106,13 @@ describe('WormholeSystems topology request validation', () => {
 
     input.systems[0].positionX = 10;
     expect(() => validateWormholesystemsTopology(input)).toThrow(/coordinate pair/);
+
+    for (const [positionX, positionY] of [[10, null], [Infinity, 20], [NaN, 20], ['10', 20]] as const) {
+      const malformed = valid() as any;
+      malformed.systems[0].positionX = positionX;
+      malformed.systems[0].positionY = positionY;
+      expect(() => validateWormholesystemsTopology(malformed)).toThrow(/coordinate pair/);
+    }
   });
 });
 

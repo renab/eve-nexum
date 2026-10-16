@@ -27,7 +27,7 @@ type ConnectionInput = {
   targetSignatureId: string | null;
 };
 type TopologyInput = { schemaVersion: 1 | 2; sourceIdentity: string; snapshot: SnapshotEvidence; systems: SystemInput[]; signatures: SignatureInput[]; connections: ConnectionInput[] };
-type Owned = { row_id: string; managed_json: Record<string, unknown> };
+type Owned = { row_id: string; source_item_id?: string; managed_json: Record<string, unknown> };
 
 const safeId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 256 && value.trim() === value && !/[\u0000-\u001f\u007f]/.test(value);
 const finiteCoordinate = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 1_000_000;
@@ -194,6 +194,9 @@ export class TopologyCheckpointConflict extends Error {
 }
 const managedSystem = (row: Record<string, unknown>) => ({ eveSystemId: row.eve_system_id, positionX: Math.fround(Number(row.position_x)),
   positionY: Math.fround(Number(row.position_y)), name: row.name, systemClass: row.system_class });
+const managedSystemWithoutPosition = (managed: Record<string, unknown>) => ({
+  eveSystemId: managed.eveSystemId, name: managed.name, systemClass: managed.systemClass,
+});
 const ownedManagedSystem = (managed: Record<string, any>) => ({ eveSystemId: managed.eveSystemId,
   positionX: Math.fround(Number(managed.positionX)), positionY: Math.fround(Number(managed.positionY)),
   name: managed.name, systemClass: managed.systemClass });
@@ -339,11 +342,12 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
     const desiredSystemIds = new Set(input.systems.map(system => system.sourceSystemId));
     const desiredEveSystemIds = new Set(input.systems.map(system => system.eveSystemId));
     const ownedSystems = await client.query<Owned>(
-      `SELECT row_id, managed_json FROM wormholesystems_topology_ownership WHERE map_id=$1 AND source_identity=$2 AND item_kind='system' FOR UPDATE`,
+      `SELECT source_item_id, row_id, managed_json FROM wormholesystems_topology_ownership WHERE map_id=$1 AND source_identity=$2 AND item_kind='system' FOR UPDATE`,
       [mapId, input.sourceIdentity],
     );
-    const ownedSystemBySource = new Map(ownedSystems.rows.map(row => [String((row.managed_json as any).sourceSystemId), row]));
+    const ownedSystemBySource = new Map(ownedSystems.rows.map(row => [String(row.source_item_id), row]));
     const sourceToRow = new Map<string, string>();
+    const conflictedOwnedSystemRowIds = new Set<string>();
     for (const system of input.systems) {
       const sdeRow = sdeById.get(system.eveSystemId)!;
       const hasPosition = system.positionX !== null && system.positionY !== null;
@@ -360,9 +364,8 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
         const previous = owned.managed_json as any;
         const currentManaged = managedSystem(row);
         const expectedManaged = ownedManagedSystem(previous);
-        const comparableManaged = hasPosition ? currentManaged : { ...currentManaged,
-          positionX: expectedManaged.positionX, positionY: expectedManaged.positionY };
-        if (!same(comparableManaged, expectedManaged)) {
+        if (owned.source_item_id !== system.sourceSystemId || previous.sourceSystemId !== system.sourceSystemId ||
+          !same(managedSystemWithoutPosition(currentManaged), managedSystemWithoutPosition(expectedManaged))) {
           result.conflicts.push({ itemId: system.sourceSystemId, reason: 'managed system was manually changed; preserved' });
           continue;
         }
@@ -398,6 +401,7 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
       if (existing.rows.length > 1) { result.conflicts.push({ itemId: system.sourceSystemId, reason: 'multiple target systems have this EVE identity' }); continue; }
       if (existing.rows.length === 1) {
         if (ownedSystems.rows.some(owner => owner.row_id === existing.rows[0].id)) {
+          conflictedOwnedSystemRowIds.add(String(existing.rows[0].id));
           result.conflicts.push({ itemId: system.sourceSystemId, reason: 'source identity changed for an already-owned system; preserved' }); continue;
         }
         result.preservedSystems++;
@@ -428,6 +432,15 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
         VALUES ($1,$2,'system',$3,$4,$5)`, [mapId, input.sourceIdentity, system.sourceSystemId, rowId, managed]);
       sourceToRow.set(system.sourceSystemId, rowId); result.createdSystems++;
       result.mappings.systems.push({ sourceId: system.sourceSystemId, rowId, ownership: 'owned' });
+    }
+
+    const conflictedSourceSystemIds = new Set(input.systems
+      .filter(system => !sourceToRow.has(system.sourceSystemId))
+      .map(system => system.sourceSystemId));
+    for (const owned of ownedSystems.rows) {
+      if (conflictedSourceSystemIds.has(String(owned.source_item_id))) {
+        conflictedOwnedSystemRowIds.add(String(owned.row_id));
+      }
     }
 
     const signatureToRow = new Map<string, { rowId: string; systemId: string; ownership: 'owned' | 'preserved'; compatible: boolean }>();
@@ -646,12 +659,15 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
 
     // Delete only exact, unchanged rows recorded as created by this source.
     for (const owned of ownedConnections.rows) {
-      const sourceConnectionId = String((owned.managed_json as any).sourceConnectionId);
+      const managed = owned.managed_json as any;
+      const sourceConnectionId = String(managed.sourceConnectionId);
       if (desiredConnectionIds.has(sourceConnectionId)) continue;
+      if (conflictedOwnedSystemRowIds.has(String(managed.sourceId)) ||
+        conflictedOwnedSystemRowIds.has(String(managed.targetId))) continue;
       const rowRes = await client.query<Record<string, unknown>>(
         `SELECT id,source_id,target_id,connection_type,size,source_handle,target_handle,mass_status,time_status,wh_type,flag_icon,flag_note,flag_blink,flag_color,mass_used,eol_at,lifetime_expires_at,broken,source_signature_id,target_signature_id
            FROM map_connections WHERE id=$1 AND map_id=$2 FOR UPDATE`, [owned.row_id, mapId]);
-      const row = rowRes.rows[0], managed = owned.managed_json as any;
+      const row = rowRes.rows[0];
       const dependent = await client.query(`SELECT 1 FROM map_connection_jumps WHERE connection_id=$1
         UNION ALL SELECT 1 FROM map_routes WHERE map_id=$2 AND $1::uuid=ANY(connection_ids) LIMIT 1`, [owned.row_id, mapId]);
       const expectedManaged = { sourceId: managed.sourceId, targetId: managed.targetId,
@@ -673,13 +689,16 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
     // signature deletion and therefore cannot cascade through manual content.
     if (input.schemaVersion === 2) {
       for (const owned of ownedSignatures.rows) {
-        const sourceSignatureId = String((owned.managed_json as any).sourceSignatureId);
+        const managed = owned.managed_json as any;
+        const sourceSignatureId = String(managed.sourceSignatureId);
         if (desiredSignatureIds.has(sourceSignatureId)) continue;
+        if (conflictedSourceSystemIds.has(String(managed.sourceSystemId)) ||
+          conflictedOwnedSystemRowIds.has(String(managed.systemId))) continue;
         const rowRes = await client.query<Record<string, unknown>>(
           `SELECT id,system_id,sig_id,sig_type,wh_type,name,notes,wh_leads_to,ghost_type,mass_status,time_status,
                   created_by_user_id,from_merge,scout_connection_id,scout_last_seen
              FROM map_signatures WHERE id=$1 AND system_id IN (SELECT id FROM map_systems WHERE map_id=$2) FOR UPDATE`, [owned.row_id, mapId]);
-        const row = rowRes.rows[0], managed = owned.managed_json as any;
+        const row = rowRes.rows[0];
         const dependent = await client.query(`SELECT 1 FROM map_connections WHERE map_id=$1 AND (source_signature_id=$2 OR target_signature_id=$2) LIMIT 1`,
           [mapId, owned.row_id]);
         if (!row || !same(managedSignature(row), { systemId: managed.systemId, sigId: managed.sigId,
@@ -696,12 +715,17 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
     }
 
     for (const owned of ownedSystems.rows) {
-      const sourceSystemId = String((owned.managed_json as any).sourceSystemId);
+      const sourceSystemId = String(owned.source_item_id ?? (owned.managed_json as any).sourceSystemId);
       if (desiredSystemIds.has(sourceSystemId)) continue;
+      const managed = owned.managed_json as any;
+      if (managed.sourceSystemId !== sourceSystemId) {
+        result.conflicts.push({ itemId: sourceSystemId, reason: 'source system ownership identity mismatch; preserved' });
+        continue;
+      }
       const rowRes = await client.query<Record<string, unknown>>(
         `SELECT id,eve_system_id,position_x,position_y,name,system_class,status,is_home,locked,notes,labels,custom_labels,intel,tag,alias,npc_type,region_name
            FROM map_systems WHERE id=$1 AND map_id=$2 FOR UPDATE`, [owned.row_id, mapId]);
-      const row = rowRes.rows[0], managed = owned.managed_json as any;
+      const row = rowRes.rows[0];
       if (row && desiredEveSystemIds.has(Number(row.eve_system_id))) {
         result.conflicts.push({ itemId: sourceSystemId, reason: 'source member identity changed for a still-present EVE system; preserved' }); continue;
       }
