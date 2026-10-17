@@ -170,3 +170,33 @@ describe('WormholeSystems v2 signature payload validation', () => {
       signatures: Array(10_001).fill({}), connections: [] })).toThrow(/bounds/);
   });
 });
+
+describe('WormholeSystems v3 signature names', () => {
+  const request = (signature: Record<string, unknown>) => validateWormholesystemsTopology({ schemaVersion: 3,
+    sourceIdentity: v2SourceIdentity, snapshot: v2Snapshot, systems: v2Systems, connections: [], signatures: [
+      { sourceSignatureId: 'resource-a', sourceSystemId: 'member-a', sourceConnectionId: null,
+        sigId: 'ABC-123', sigType: 'data', whType: '', name: 'Sleeper Cache', ...signature },
+    ] });
+
+  it('requires an explicit nullable name and preserves its exact normalized value', () => {
+    expect(request({}).signatures[0].name).toBe('Sleeper Cache');
+    expect(request({ name: null }).signatures[0].name).toBeNull();
+    expect(() => request({ name: '  ' })).toThrow(/display name/);
+    expect(() => request({ name: '' })).toThrow(/display name/);
+    expect(() => request({ name: ' name' })).toThrow(/display name/);
+    expect(() => request({ name: 'name ' })).toThrow(/display name/);
+    expect(() => request({ name: 'name\u0085' })).toThrow(/display name/);
+    expect(() => request({ name: 'name\u200e' })).toThrow(/display name/);
+  });
+
+  it('rejects missing names and extra name fields on the legacy v2 schema', () => {
+    expect(() => validateWormholesystemsTopology({ schemaVersion: 3, sourceIdentity: v2SourceIdentity,
+      snapshot: v2Snapshot, systems: v2Systems, connections: [], signatures: [
+        { sourceSignatureId: 'resource-a', sourceSystemId: 'member-a', sigId: 'ABC-123', sigType: 'data', whType: '' },
+      ] })).toThrow(/display name/);
+    expect(() => validateWormholesystemsTopology({ schemaVersion: 2, sourceIdentity: v2SourceIdentity,
+      snapshot: v2Snapshot, systems: v2Systems, connections: [], signatures: [
+        { sourceSignatureId: 'resource-a', sourceSystemId: 'member-a', sigId: 'ABC-123', sigType: 'data', whType: '', name: 'untrusted' },
+      ] })).toThrow(/Unrecognized source signature field/);
+  });
+});
