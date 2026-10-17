@@ -277,9 +277,15 @@ curl -H "Authorization: Bearer nxm_…" https://yourdomain.com/api/v1/maps
 | `POST/PATCH/DELETE /api/v1/maps/:mapId/systems/:systemId/signatures[/:sigId]` | Add / edit / remove a signature |
 | `POST/PATCH/DELETE /api/v1/maps/:mapId/systems/:systemId/anomalies[/:anomId]` | Add / edit / remove an anomaly |
 | `POST/PATCH/DELETE /api/v1/maps/:mapId/systems/:systemId/structures[/:structureId]` | Add / edit / remove a structure |
-| `PUT /api/v1/maps/:mapId/wormholesystems/topology` | Reconcile source-identified systems and connections; requires the WormholeSystems scope bound to `:mapId` |
+| `PUT /api/v1/maps/:mapId/wormholesystems/topology` | Reconcile source-owned systems, signatures, and connections; requires the WormholeSystems scope bound to `:mapId` |
 
 Writes go through the exact same path as the app — so they fan out over the [event stream](#live-event-stream), trigger the inbound-K162 Discord notice, and cross-map sync just like a human edit.
+
+The topology endpoint accepts complete `schemaVersion: 3` requests. Each signature requires `name`, either `null` or an exact 1–256-character display-name string with no leading/trailing whitespace or Unicode control characters. `null` preserves an existing source-owned name; names are never applied to manual or unmatched rows. Legacy v1/v2 requests remain supported for compatibility until a v3 checkpoint has been accepted for that map/source; after that, older versions are rejected, and a changed payload at the same fetch timestamp conflicts. Exact retries replay the committed checkpoint result.
+
+Responses include checkpoint state, counts, and bounded per-kind reconciliation outcomes. A committed partial result can include successful independent changes alongside blocked or preserved rows and skipped unsafe deletions; inspect the outcome totals and omission counts rather than treating partial reconciliation as full success. The topology PUT does not update linked notes.
+
+`POST /api/v1/maps/:mapId/wormholesystems/ownership` is a read-only, map-bound attestation for explicitly requested `{ sourceSignatureId, rowId }` pairs. It requires the same `wormholesystems_sync` scope bound to `:mapId`, returns only whether each requested pair is owned, and never enumerates ownership records. Galaxy uses it for a separately invoked linked-note operation.
 
 ### Live event stream
 

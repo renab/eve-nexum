@@ -4,7 +4,8 @@ import { apiKeyAuth } from '../middleware/apiKeyAuth.js';
 import { authUser, canEditTopology, isAdmin, isAllianceAdmin } from '../middleware/authContext.js';
 import { getMapAccess, requireMapContentWrite, dispatchK162, flushK162, resolveStructureOwnerCorp } from './maps.js';
 import { streamMapEvents } from '../services/mapStream.js';
-import { MapLockedError, TopologyAccessError, TopologyCheckpointConflict, reconcileWormholesystemsTopology, validateWormholesystemsTopology } from '../services/wormholesystemsTopology.js';
+import { MapLockedError, TopologyAccessError, TopologyCheckpointConflict, attestWormholesystemsSignatureOwnership,
+  reconcileWormholesystemsTopology, validateWormholesystemsTopology } from '../services/wormholesystemsTopology.js';
 import {
   listVisibleMaps, loadFullMap, isSystemInMap,
   loadSystemSignatures, loadSystemAnomalies, loadSystemStructures,
@@ -158,6 +159,34 @@ apiV1Router.put('/maps/:mapId/wormholesystems/topology', async (req, res) => {
     if (error instanceof TopologyAccessError) { res.status(error.status).json({ error: error.message }); return; }
     if (error instanceof TopologyCheckpointConflict) { res.status(409).json({ error: error.message }); return; }
     throw error;
+  }
+});
+
+// Read-only, map-bound proof for separately invoked linked-note PATCHes. The
+// endpoint returns only requested source/row pairs and never enumerates owners.
+apiV1Router.post('/maps/:mapId/wormholesystems/ownership', async (req, res) => {
+  const actor = authUser(req);
+  const { mapId } = req.params;
+  if (actor.apiScope !== 'wormholesystems_sync' || actor.apiScopeMapId !== mapId) {
+    res.status(403).json({ error: 'A WormholeSystems key bound to this map is required' }); return;
+  }
+  const access = await getMapAccess(mapId, req);
+  if (!access) { res.status(404).json({ error: 'Map not found' }); return; }
+  if (access.accessKind === 'shared' && access.shareCanWrite === false) {
+    res.status(403).json({ error: 'This map was shared with you view-only' }); return;
+  }
+  if (access.accessKind !== 'owner' && !canEditTopology(actor.role)) {
+    res.status(403).json({ error: 'Topology-edit permission required' }); return;
+  }
+  const body = req.body as Record<string, unknown>;
+  if (!body || typeof body !== 'object' || Array.isArray(body) ||
+      Object.keys(body).some(key => !['sourceIdentity', 'items'].includes(key))) {
+    res.status(400).json({ error: 'Invalid ownership attestation request' }); return;
+  }
+  try {
+    res.json(await attestWormholesystemsSignatureOwnership(mapId, body.sourceIdentity, body.items));
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid ownership attestation request' });
   }
 });
 

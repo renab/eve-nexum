@@ -3,6 +3,7 @@ import express from 'express';
 import request from 'supertest';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db } from '../db.js';
+import { migrate } from '../migrate.js';
 import { generateApiKey } from '../utils/apiKeys.js';
 import { ensureIntegrationDb, seedUser, truncateAll } from '../test/integrationDb.js';
 import { sweepConnLifetimes } from '../services/connLifetimeSweep.js';
@@ -19,8 +20,9 @@ function freshSnapshot(complete = true) {
 }
 
 async function newerSnapshot(previousFetchedAt: string) {
-  while (Date.now() <= Date.parse(previousFetchedAt)) await new Promise(resolve => setTimeout(resolve, 1));
-  return freshSnapshot();
+  const previousTime = Date.parse(previousFetchedAt);
+  while (Date.now() <= previousTime + 1) await new Promise(resolve => setTimeout(resolve, 1));
+  return { complete: true, fetchedAt: new Date(Date.now() - 1).toISOString() };
 }
 
 describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (integration)', () => {
@@ -108,6 +110,15 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     };
   }
 
+  function v3Topology(name: string | null, overrides: Record<string, unknown> = {}) {
+    return {
+      ...v2Topology({ schemaVersion: 3, signatures: [{ sourceSignatureId: 'source-sig', sourceSystemId: 'member-1',
+        sourceConnectionId: null, sigId: 'ABC-123', sigType: 'data', whType: '', name }] }),
+      schemaVersion: 3,
+      ...overrides,
+    };
+  }
+
   beforeEach(async () => {
     await truncateAll();
     userId = await seedUser({ characterId: 880_000_001, role: 'admin' });
@@ -165,8 +176,24 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     expect((await sendTopology(moved)).body.updatedSystems).toBe(1);
     const edgeRemoved = await sendTopology({ ...moved, snapshot: freshSnapshot(), connections: [] });
     expect(edgeRemoved.body.deletedConnections).toBe(1);
-    const allRemoved = await sendTopology({ ...moved, snapshot: freshSnapshot(), systems: [], connections: [] });
+    expect(edgeRemoved.body.outcomes.items.deleted).toEqual([
+      { itemKind: 'connection', sourceItemId: 'edge-1', reasonCode: 'source_owned_connection_deleted',
+        nexumRowId: created.body.mappings.connections[0].rowId },
+    ]);
+    const allRemovedPayload = { ...moved, snapshot: freshSnapshot(), systems: [], connections: [] };
+    const allRemoved = await sendTopology(allRemovedPayload);
     expect(allRemoved.body.deletedSystems).toBe(2);
+    expect(allRemoved.body.outcomes.items.deleted).toEqual([
+      { itemKind: 'system', sourceItemId: 'member-1', reasonCode: 'source_owned_system_deleted',
+        nexumRowId: created.body.mappings.systems.find((mapping: any) => mapping.sourceId === 'member-1').rowId },
+      { itemKind: 'system', sourceItemId: 'member-2', reasonCode: 'source_owned_system_deleted',
+        nexumRowId: created.body.mappings.systems.find((mapping: any) => mapping.sourceId === 'member-2').rowId },
+    ]);
+    const allRemovedReplay = await sendTopology(allRemovedPayload);
+    const expectedReplay = structuredClone(allRemoved.body);
+    expectedReplay.checkpoint.replayed = true;
+    expect(allRemovedReplay.status).toBe(200);
+    expect(allRemovedReplay.body).toEqual(expectedReplay);
     expect((await db.query('SELECT 1 FROM map_systems WHERE map_id=$1', [mapId])).rows).toHaveLength(0);
     expect((await db.query('SELECT 1 FROM wormholesystems_topology_ownership WHERE map_id=$1', [mapId])).rows).toHaveLength(0);
   });
@@ -192,6 +219,93 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
       replayedFromLegacyCheckpoint: true });
     expect(emptyOutcomeReplay.body).not.toHaveProperty('createdSystems');
     expect((await db.query('SELECT 1 FROM map_systems WHERE map_id=$1', [mapId])).rows).toHaveLength(1);
+  });
+
+  it('expands the checkpoint version constraint without changing v1/v2 checkpoints or ownership', async () => {
+    const v1Identity = 'wormholesystems:["https://source.example","migration-v1"]';
+    const v2Identity = 'wormholesystems:["https://source.example","migration-v2"]';
+    const v3Identity = 'wormholesystems:["https://source.example","migration-v3"]';
+    const v1Payload = { sourceIdentity: v1Identity, snapshot: freshSnapshot(),
+      systems: [{ sourceSystemId: 'migration-v1-member', eveSystemId: 31_000_001, positionX: 1, positionY: 2 }], connections: [] };
+    const v2Payload = v2Topology({ sourceIdentity: v2Identity,
+      systems: [{ sourceSystemId: 'migration-v2-member', eveSystemId: 31_000_002, positionX: 3, positionY: 4 }] });
+
+    expect((await sendTopology(v1Payload)).status).toBe(200);
+    expect((await sendTopology(v2Payload)).status).toBe(200);
+    const beforeCheckpoints = await db.query(`SELECT source_identity,fetched_at,payload_digest,schema_version,result_json
+      FROM wormholesystems_topology_checkpoints WHERE map_id=$1 AND source_identity=ANY($2::text[]) ORDER BY source_identity`,
+    [mapId, [v1Identity, v2Identity]]);
+    const beforeOwnership = await db.query(`SELECT source_identity,item_kind,source_item_id,row_id,managed_json
+      FROM wormholesystems_topology_ownership WHERE map_id=$1 AND source_identity=ANY($2::text[])
+      ORDER BY source_identity,item_kind,source_item_id`, [mapId, [v1Identity, v2Identity]]);
+    expect(beforeCheckpoints.rows.map(row => row.schema_version)).toEqual([1, 2]);
+    expect(beforeOwnership.rows).toHaveLength(2);
+
+    await db.query(`ALTER TABLE wormholesystems_topology_checkpoints
+      DROP CONSTRAINT wormholesystems_topology_checkpoints_schema_version_check`);
+    await db.query(`ALTER TABLE wormholesystems_topology_checkpoints ADD CONSTRAINT wormholesystems_topology_checkpoints_schema_version_check
+      CHECK (schema_version IN (1,2))`);
+    await migrate();
+    await migrate();
+
+    expect((await db.query(`SELECT source_identity,fetched_at,payload_digest,schema_version,result_json
+      FROM wormholesystems_topology_checkpoints WHERE map_id=$1 AND source_identity=ANY($2::text[]) ORDER BY source_identity`,
+    [mapId, [v1Identity, v2Identity]])).rows).toEqual(beforeCheckpoints.rows);
+    expect((await db.query(`SELECT source_identity,item_kind,source_item_id,row_id,managed_json
+      FROM wormholesystems_topology_ownership WHERE map_id=$1 AND source_identity=ANY($2::text[])
+      ORDER BY source_identity,item_kind,source_item_id`, [mapId, [v1Identity, v2Identity]])).rows).toEqual(beforeOwnership.rows);
+
+    expect((await sendTopology(v1Payload)).body).toMatchObject({ checkpoint: { accepted: true, replayed: true } });
+    expect((await sendTopology(v2Payload)).body).toMatchObject({ checkpoint: { accepted: true, replayed: true } });
+    const v3Payload = v3Topology('Migration Site', { sourceIdentity: v3Identity,
+      systems: [{ sourceSystemId: 'migration-v3-member', eveSystemId: 31_000_001, positionX: 5, positionY: 6 }],
+      signatures: [{ sourceSignatureId: 'migration-v3-signature', sourceSystemId: 'migration-v3-member',
+        sourceConnectionId: null, sigId: 'MIG-003', sigType: 'data', whType: '', name: 'Migration Site' }] });
+    expect((await sendTopology(v3Payload)).body).toMatchObject({ checkpoint: { accepted: true, replayed: false } });
+    const downgrade = v2Topology({ sourceIdentity: v3Identity,
+      systems: [{ sourceSystemId: 'migration-v3-member', eveSystemId: 31_000_001, positionX: 5, positionY: 6 }] });
+    const rejectedDowngrade = await sendTopology(downgrade);
+    expect(rejectedDowngrade.status).toBe(409);
+    expect(rejectedDowngrade.body.error).toMatch(/schema version 3 has already been accepted/i);
+  });
+
+  it('reconciles v3 names only on proven owned signatures and enforces the checkpoint version gate', async () => {
+    const legacy = v2Topology({ signatures: [{ sourceSignatureId: 'source-sig', sourceSystemId: 'member-1',
+      sourceConnectionId: null, sigId: 'ABC-123', sigType: 'data', whType: '' }] });
+    expect((await sendTopology(legacy)).status).toBe(200);
+    const sameTimeV3 = v3Topology('Sleeper Cache', { snapshot: legacy.snapshot });
+    expect((await sendTopology(sameTimeV3)).status).toBe(409);
+
+    const v3 = v3Topology('Sleeper Cache', { snapshot: await newerSnapshot(legacy.snapshot.fetchedAt) });
+    const accepted = await sendTopology(v3);
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).toMatchObject({ updatedSignatures: 1, checkpoint: { accepted: true, partial: false } });
+    const signature = (await db.query<{ id: string; name: string }>(
+      `SELECT s.id,s.name FROM map_signatures s JOIN map_systems m ON m.id=s.system_id WHERE m.map_id=$1 AND s.sig_id='ABC-123'`, [mapId])).rows[0];
+    expect(signature.name).toBe('Sleeper Cache');
+    const proof = await request(app()).post(`/api/v1/maps/${mapId}/wormholesystems/ownership`)
+      .set('Authorization', `Bearer ${rawKey}`).send({ sourceIdentity, items: [{ sourceSignatureId: 'source-sig', rowId: signature.id }] });
+    expect(proof.status).toBe(200);
+    expect(proof.body.items).toEqual([{ sourceSignatureId: 'source-sig', rowId: signature.id, owned: true }]);
+    const mismatch = await request(app()).post(`/api/v1/maps/${mapId}/wormholesystems/ownership`)
+      .set('Authorization', `Bearer ${rawKey}`).send({ sourceIdentity, items: [{ sourceSignatureId: 'other-source', rowId: signature.id }] });
+    expect(mismatch.body.items).toEqual([{ sourceSignatureId: 'other-source', rowId: signature.id, owned: false }]);
+    expect((await request(app()).post(`/api/v1/maps/${otherMapId}/wormholesystems/ownership`)
+      .set('Authorization', `Bearer ${rawKey}`).send({ sourceIdentity, items: [{ sourceSignatureId: 'source-sig', rowId: signature.id }] })).status).toBe(403);
+
+    await db.query('UPDATE map_signatures SET name=$1 WHERE id=$2', ['locally drifted', signature.id]);
+    const refresh = v3Topology('Refreshed Site', { snapshot: freshSnapshot() });
+    expect((await sendTopology(refresh)).body.updatedSignatures).toBe(1);
+    expect((await db.query('SELECT name FROM map_signatures WHERE id=$1', [signature.id])).rows[0].name).toBe('Refreshed Site');
+
+    await db.query('UPDATE map_signatures SET name=$1 WHERE id=$2', ['preserve unresolved', signature.id]);
+    const unresolved = v3Topology(null, { snapshot: freshSnapshot() });
+    expect((await sendTopology(unresolved)).body.updatedSignatures).toBe(0);
+    expect((await db.query('SELECT name FROM map_signatures WHERE id=$1', [signature.id])).rows[0].name).toBe('preserve unresolved');
+
+    const replay = await sendTopology(unresolved);
+    expect(replay.body).toMatchObject({ checkpoint: { accepted: true, replayed: true } });
+    expect((await sendTopology(v2Topology({ snapshot: freshSnapshot() }))).status).toBe(409);
   });
 
   it('keeps one source identity from updating or deleting another identity’s owned topology', async () => {
@@ -404,7 +518,7 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
 
     expect(result.body).toMatchObject({ updatedSystems: 0, updatedConnections: 0, deletedConnections: 0, deletedSignatures: 1,
       checkpoint: { partial: true }, conflicts: expect.arrayContaining([
-      { itemId: 'member-1', reason: 'managed system was manually changed; preserved' },
+      expect.objectContaining({ itemId: 'member-1', reason: 'managed system was manually changed; preserved' }),
     ]), mappings: { systems: [{ sourceId: 'member-2' }], connections: [] } });
     expect((await db.query('SELECT id,eve_system_id,position_x,position_y,name FROM map_systems WHERE map_id=$1 AND eve_system_id=31000001', [mapId])).rows)
       .toEqual([{ id: original.rows[0].id, eve_system_id: 31_000_001, position_x: 99, position_y: 98, name: 'Manual name' }]);
@@ -473,7 +587,7 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
 
     expect(result.body).toMatchObject({ deletedSystems: 0, deletedConnections: 0, deletedSignatures: 1,
       conflicts: expect.arrayContaining([
-        { itemId: 'member-new', reason: 'source identity changed for an already-owned system; preserved' },
+        expect.objectContaining({ itemId: 'member-new', reason: 'source identity changed for an already-owned system; preserved' }),
       ]) });
     expect((await db.query(
       `SELECT id,eve_system_id,position_x,position_y,name,system_class FROM map_systems WHERE map_id=$1 AND eve_system_id=31000001`, [mapId])).rows)
@@ -523,6 +637,63 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     expect((await db.query<{ managed_json: Record<string, unknown> }>(
       `SELECT managed_json FROM wormholesystems_topology_ownership WHERE map_id=$1 AND source_item_id='identity-member'`, [mapId])).rows[0].managed_json)
       .toMatchObject({ sourceSystemId: 'different-member', positionX: 10, positionY: 20 });
+  });
+
+  it('preserves source-owned signatures and connections when ownership source_item_id disagrees with managed identity', async () => {
+    const initial = v2Topology({
+      signatures: [{ sourceSignatureId: 'ownership-signature', sourceSystemId: 'member-1', sourceConnectionId: null,
+        sigId: 'OWN-101', sigType: 'data', whType: '' }],
+      connections: [{ sourceConnectionId: 'ownership-edge', fromSourceSystemId: 'member-1', toSourceSystemId: 'member-2',
+        connection_type: 'standard', ship_size: 'large' }],
+    });
+    const created = await sendTopology(initial);
+    expect(created.body).toMatchObject({ createdSignatures: 1, createdConnections: 1 });
+    const signatureId = created.body.mappings.signatures[0].rowId;
+    const connectionId = created.body.mappings.connections[0].rowId;
+    await db.query(`UPDATE wormholesystems_topology_ownership SET source_item_id='wrong-signature-owner'
+      WHERE map_id=$1 AND item_kind='signature' AND source_item_id='ownership-signature'`, [mapId]);
+    await db.query(`UPDATE wormholesystems_topology_ownership SET source_item_id='wrong-connection-owner'
+      WHERE map_id=$1 AND item_kind='connection' AND source_item_id='ownership-edge'`, [mapId]);
+    const ownershipBefore = await db.query(`SELECT item_kind,source_item_id,row_id,managed_json FROM wormholesystems_topology_ownership
+      WHERE map_id=$1 AND row_id=ANY($2::uuid[]) ORDER BY item_kind`, [mapId, [signatureId, connectionId]]);
+    const signatureBefore = await db.query(`SELECT id,system_id,sig_id,sig_type,wh_type FROM map_signatures WHERE id=$1`, [signatureId]);
+    const connectionBefore = await db.query(`SELECT id,source_id,target_id,connection_type,size FROM map_connections WHERE id=$1`, [connectionId]);
+
+    const changed = structuredClone(initial) as any;
+    changed.snapshot = await newerSnapshot(initial.snapshot.fetchedAt);
+    changed.signatures[0].sigType = 'relic';
+    changed.connections[0].connection_type = 'gate';
+    const update = await sendTopology(changed);
+    expect(update.body).toMatchObject({ updatedSignatures: 0, updatedConnections: 0,
+      conflicts: expect.arrayContaining([
+        expect.objectContaining({ itemId: 'ownership-signature', reasonCode: 'source_ownership_identity_mismatch', fields: ['source_item_id'] }),
+        expect.objectContaining({ itemId: 'ownership-edge', reasonCode: 'source_ownership_identity_mismatch', fields: ['source_item_id'] }),
+      ]), outcomes: { totalsByKind: { signature: { blocked: 1 }, connection: { blocked: 1 } } } });
+    expect(update.body.mappings.signatures).toEqual([]);
+    expect(update.body.mappings.connections).toEqual([]);
+    expect((await db.query(`SELECT id,system_id,sig_id,sig_type,wh_type FROM map_signatures WHERE id=$1`, [signatureId])).rows)
+      .toEqual(signatureBefore.rows);
+    expect((await db.query(`SELECT id,source_id,target_id,connection_type,size FROM map_connections WHERE id=$1`, [connectionId])).rows)
+      .toEqual(connectionBefore.rows);
+
+    const removed = await sendTopology({ ...changed, snapshot: await newerSnapshot(changed.snapshot.fetchedAt), signatures: [], connections: [] });
+    expect(removed.body).toMatchObject({ deletedSignatures: 0, deletedConnections: 0, conflictCount: 2,
+      outcomes: { totalsByKind: { signature: { skipped_deletion: 1 }, connection: { skipped_deletion: 1 } } },
+      conflicts: expect.arrayContaining([
+        expect.objectContaining({ itemId: 'ownership-signature', reasonCode: 'source_ownership_identity_mismatch', fields: ['source_item_id'] }),
+        expect.objectContaining({ itemId: 'ownership-edge', reasonCode: 'source_ownership_identity_mismatch', fields: ['source_item_id'] }),
+      ]) });
+    expect(removed.body.outcomes.items.skipped_deletion).toEqual(expect.arrayContaining([
+      { itemKind: 'signature', sourceItemId: 'ownership-signature', reasonCode: 'source_ownership_identity_mismatch', fields: ['source_item_id'] },
+      { itemKind: 'connection', sourceItemId: 'ownership-edge', reasonCode: 'source_ownership_identity_mismatch', fields: ['source_item_id'] },
+    ]));
+    expect((await db.query(`SELECT id,system_id,sig_id,sig_type,wh_type FROM map_signatures WHERE id=$1`, [signatureId])).rows)
+      .toEqual(signatureBefore.rows);
+    expect((await db.query(`SELECT id,source_id,target_id,connection_type,size FROM map_connections WHERE id=$1`, [connectionId])).rows)
+      .toEqual(connectionBefore.rows);
+    expect((await db.query(`SELECT item_kind,source_item_id,row_id,managed_json FROM wormholesystems_topology_ownership
+      WHERE map_id=$1 AND row_id=ANY($2::uuid[]) ORDER BY item_kind`, [mapId, [signatureId, connectionId]])).rows)
+      .toEqual(ownershipBefore.rows);
   });
 
   it('updates position-only drift without changing source-owned row identities or Nexum annotations', async () => {
@@ -643,11 +814,74 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
 
     const removed = await sendTopology({ ...payload, snapshot: freshSnapshot(), systems: [] });
     expect(removed.body.deletedSystems).toBe(0);
-    expect(removed.body.conflicts).toContainEqual({
+    expect(removed.body.conflicts).toContainEqual(expect.objectContaining({
       itemId: 'region-member', reason: 'removed source system has manual changes or related map data; preserved',
-    });
+      reasonCode: 'unsafe_absent_owned_system', fields: ['region_name'],
+    }));
+    expect(removed.body.outcomes.items.skipped_deletion).toContainEqual({ itemKind: 'system', sourceItemId: 'region-member',
+      reasonCode: 'manual_or_managed_change', fields: ['region_name'] });
     expect((await db.query('SELECT region_name FROM map_systems WHERE map_id=$1', [mapId])).rows)
       .toEqual([{ region_name: 'Manual region' }]);
+  });
+
+  it('reports only actual fields and identifies dependencies blocking connection and system deletion', async () => {
+    await db.query(`INSERT INTO solar_systems (id,name,class) VALUES
+      (31000003,'J100003','C4'),(31000004,'J100004','C5'),(31000005,'J100005','C6')`);
+    const payload = v2Topology({
+      systems: [
+        { sourceSystemId: 'route-system-a', eveSystemId: 31_000_001, positionX: 10, positionY: 20 },
+        { sourceSystemId: 'route-system-b', eveSystemId: 31_000_002, positionX: 30, positionY: 40 },
+        { sourceSystemId: 'flag-system-a', eveSystemId: 31_000_003, positionX: 50, positionY: 60 },
+        { sourceSystemId: 'flag-system-b', eveSystemId: 31_000_004, positionX: 70, positionY: 80 },
+        { sourceSystemId: 'anomaly-system', eveSystemId: 31_000_005, positionX: 90, positionY: 100 },
+      ],
+      connections: [
+        { sourceConnectionId: 'route-edge', fromSourceSystemId: 'route-system-a', toSourceSystemId: 'route-system-b',
+          connection_type: 'standard', ship_size: 'large' },
+        { sourceConnectionId: 'flag-edge', fromSourceSystemId: 'flag-system-a', toSourceSystemId: 'flag-system-b',
+          connection_type: 'standard', ship_size: 'large' },
+      ],
+    });
+    expect((await sendTopology(payload)).body).toMatchObject({ createdSystems: 5, createdConnections: 2 });
+    const connections = await db.query<{ id: string; source_item_id: string }>(`SELECT c.id,o.source_item_id FROM map_connections c
+      JOIN wormholesystems_topology_ownership o ON o.map_id=c.map_id AND o.item_kind='connection' AND o.row_id=c.id
+      WHERE c.map_id=$1 ORDER BY o.source_item_id`, [mapId]);
+    const routeConnectionId = connections.rows.find(row => row.source_item_id === 'route-edge')!.id;
+    const flagConnectionId = connections.rows.find(row => row.source_item_id === 'flag-edge')!.id;
+    const routeId = '00000000-0000-4000-8000-000000000001';
+    const secondRouteId = '00000000-0000-4000-8000-000000000002';
+    await db.query(`INSERT INTO map_routes (id,map_id,name,connection_ids) VALUES
+      ($1,$2,'Retained route A',$3::uuid[]),($4,$2,'Retained route B',$3::uuid[])`,
+      [routeId, mapId, [routeConnectionId], secondRouteId]);
+    await db.query(`UPDATE map_connections SET flag_note='manual note' WHERE id=$1`, [flagConnectionId]);
+    const anomalySystemId = (await db.query<{ id: string }>(`SELECT id FROM map_systems WHERE map_id=$1 AND eve_system_id=31000005`, [mapId])).rows[0].id;
+    const anomalyId = '00000000-0000-4000-8000-000000000011';
+    const secondAnomalyId = '00000000-0000-4000-8000-000000000012';
+    await db.query(`INSERT INTO map_anomalies (id,system_id,anom_id) VALUES ($1,$2,'ANOM-1'),($3,$2,'ANOM-2')`,
+      [anomalyId, anomalySystemId, secondAnomalyId]);
+
+    const removedConnections = await sendTopology({ ...payload, snapshot: await newerSnapshot(payload.snapshot.fetchedAt), connections: [] });
+    expect(removedConnections.body.deletedConnections).toBe(0);
+    expect(removedConnections.body.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ itemId: 'route-edge', reason: 'removed source connection is referenced by saved route; preserved',
+        reasonCode: 'dependent_route', dependency: { kind: 'route', id: routeId } }),
+      expect.objectContaining({ itemId: 'flag-edge', reasonCode: 'unsafe_absent_owned_connection', fields: ['flag_note'] }),
+    ]));
+    expect(removedConnections.body.outcomes.items.skipped_deletion).toEqual(expect.arrayContaining([
+      { itemKind: 'connection', sourceItemId: 'route-edge', reasonCode: 'dependent_route', dependency: { kind: 'route', id: routeId } },
+      { itemKind: 'connection', sourceItemId: 'flag-edge', reasonCode: 'manual_or_managed_change', fields: ['flag_note'] },
+    ]));
+    expect(removedConnections.body.outcomes.totalsByKind.connection).toMatchObject({ preserved: 0, skipped_deletion: 2 });
+    expect(removedConnections.body.outcomes.items.preserved.filter((item: any) => ['route-edge', 'flag-edge'].includes(item.sourceItemId))).toEqual([]);
+
+    const removedSystems = await sendTopology({ ...payload, snapshot: await newerSnapshot(removedConnections.body.snapshotFetchedAt),
+      systems: [], connections: [] });
+    expect(removedSystems.body.deletedSystems).toBe(0);
+    expect(removedSystems.body.conflicts).toContainEqual(expect.objectContaining({ itemId: 'anomaly-system',
+      reason: 'removed source system is referenced by anomaly; preserved', reasonCode: 'dependent_anomaly',
+      dependency: { kind: 'anomaly', id: anomalyId } }));
+    expect(removedSystems.body.outcomes.items.skipped_deletion).toContainEqual({ itemKind: 'system', sourceItemId: 'anomaly-system',
+      reasonCode: 'dependent_anomaly', dependency: { kind: 'anomaly', id: anomalyId } });
   });
 
   it('creates source-owned systems with SDE effect and statics', async () => {
@@ -685,7 +919,7 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     retargeted.connections[0].toSourceSystemId = 'endpoint-3';
     const result = await sendTopology({ ...retargeted, snapshot: freshSnapshot() });
     expect(result.body.updatedConnections).toBe(0);
-    expect(result.body.conflicts).toContainEqual({ itemId: 'endpoint-edge', reason: 'connection has manual data or references; preserved' });
+    expect(result.body.conflicts).toContainEqual(expect.objectContaining({ itemId: 'endpoint-edge', reason: 'connection has manual data or references; preserved' }));
 
     const systems = await db.query<{ id: string; eve_system_id: number }>(`SELECT id,eve_system_id FROM map_systems WHERE map_id=$1`, [mapId]);
     const originalSource = systems.rows.find(system => Number(system.eve_system_id) === 31_000_001)!.id;
@@ -1232,14 +1466,334 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
     expect(blankRows.rows.find(row => row.id !== manualBlankId)?.source_item_id).toBe('source-unassigned');
   });
 
-  it('deletes only unchanged absent owned signatures and protects manual data or connection references', async () => {
+  it('reports manual v3 name conflicts independently of incompatible signature types', async () => {
+    const systemId = crypto.randomUUID();
+    await db.query(`INSERT INTO map_systems (id,map_id,eve_system_id,name,system_class) VALUES ($1,$2,31000001,'Manual','C2')`, [systemId, mapId]);
+    const manualId = crypto.randomUUID();
+    await db.query(`INSERT INTO map_signatures (id,system_id,sig_id,sig_type,wh_type,name,notes)
+      VALUES ($1,$2,'ABC-123','data','','Manual Site Name','keep')`, [manualId, systemId]);
+    const manualNameOnlyId = crypto.randomUUID();
+    await db.query(`INSERT INTO map_signatures (id,system_id,sig_id,sig_type,wh_type,name)
+      VALUES ($1,$2,'DEF-456','data','','Different Manual Name')`, [manualNameOnlyId, systemId]);
+
+    const result = await sendTopology(v3Topology('Resolved Source Name', {
+      systems: [{ sourceSystemId: 'member-1', eveSystemId: 31_000_001, positionX: 1, positionY: 2 }],
+      signatures: [
+        { sourceSignatureId: 'source-manual-v3', sourceSystemId: 'member-1', sourceConnectionId: null,
+          sigId: 'ABC-123', sigType: 'wormhole', whType: 'C247', name: 'Resolved Source Name' },
+        { sourceSignatureId: 'source-manual-name-only', sourceSystemId: 'member-1', sourceConnectionId: null,
+          sigId: 'DEF-456', sigType: 'data', whType: '', name: 'Resolved Second Name' },
+      ],
+    }));
+
+    expect(result.body).toMatchObject({ preservedSignatures: 2, conflictCount: 3, checkpoint: { partial: true }, conflicts: expect.arrayContaining([
+      expect.objectContaining({ itemId: 'source-manual-v3', reason: 'matching manual signature has different managed type fields; preserved',
+        reasonCode: 'managed_field_conflict', fields: ['sig_type', 'wh_type'], nexumRowId: manualId }),
+      expect.objectContaining({ itemId: 'source-manual-v3', reason: 'matching manual signature name is not source-managed; preserved',
+        reasonCode: 'manual_name_not_managed', fields: ['name'], nexumRowId: manualId }),
+      expect.objectContaining({ itemId: 'source-manual-name-only', reasonCode: 'manual_name_not_managed', fields: ['name'], nexumRowId: manualNameOnlyId }),
+    ]), mappings: { signatures: expect.arrayContaining([
+      { sourceId: 'source-manual-v3', rowId: manualId, ownership: 'preserved' },
+      { sourceId: 'source-manual-name-only', rowId: manualNameOnlyId, ownership: 'preserved' },
+    ]) } });
+    expect(result.body.conflicts.filter((conflict: any) => conflict.itemId === 'source-manual-v3')).toHaveLength(2);
+    expect(result.body.outcomes.totalsByKind.signature).toMatchObject({ blocked: 0, preserved: 2, skipped_deletion: 0, deleted: 0 });
+    expect(result.body.outcomes.items.preserved.filter((item: any) => item.sourceItemId === 'source-manual-v3')).toEqual([
+      { itemKind: 'signature', sourceItemId: 'source-manual-v3', reasonCode: 'managed_field_conflict',
+        reasonCodes: [
+          { reasonCode: 'managed_field_conflict', fields: ['sig_type', 'wh_type'] },
+          { reasonCode: 'manual_name_not_managed', fields: ['name'] },
+        ], fields: ['name', 'sig_type', 'wh_type'], nexumRowId: manualId },
+    ]);
+    expect(result.body.outcomes.items.preserved.filter((item: any) => item.sourceItemId === 'source-manual-name-only')).toEqual([
+      { itemKind: 'signature', sourceItemId: 'source-manual-name-only', reasonCode: 'manual_name_not_managed',
+        fields: ['name'], nexumRowId: manualNameOnlyId },
+    ]);
+    expect((await db.query<{ sig_type: string; wh_type: string; name: string; notes: string }>(
+      'SELECT sig_type,wh_type,name,notes FROM map_signatures WHERE id=$1', [manualId])).rows[0])
+      .toEqual({ sig_type: 'data', wh_type: '', name: 'Manual Site Name', notes: 'keep' });
+    expect((await db.query<{ sig_type: string; wh_type: string; name: string }>(
+      'SELECT sig_type,wh_type,name FROM map_signatures WHERE id=$1', [manualNameOnlyId])).rows[0])
+      .toEqual({ sig_type: 'data', wh_type: '', name: 'Different Manual Name' });
+  });
+
+  it('reports only mismatched manual signature fields and exact unresolved reference fields through replay', async () => {
+    const initial = v2Topology();
+    expect((await sendTopology(initial)).body.createdSystems).toBe(2);
+    const systems = await db.query<{ id: string; eve_system_id: number }>(
+      'SELECT id,eve_system_id FROM map_systems WHERE map_id=$1', [mapId]);
+    const systemByEveId = new Map(systems.rows.map(system => [system.eve_system_id, system.id]));
+    const sourceSignatureId = crypto.randomUUID(), targetSignatureId = crypto.randomUUID();
+    await db.query(`INSERT INTO map_signatures (id,system_id,sig_id,sig_type,wh_type)
+      VALUES ($1,$2,'TYPE-123','data','B274'),($3,$4,'WH-123','wormhole','C247')`,
+    [sourceSignatureId, systemByEveId.get(31_000_001), targetSignatureId, systemByEveId.get(31_000_002)]);
+
+    const payload = v2Topology({ snapshot: await newerSnapshot(initial.snapshot.fetchedAt),
+      signatures: [
+        { sourceSignatureId: 'source-type-only', sourceSystemId: 'member-1', sourceConnectionId: 'edge-source',
+          sigId: 'TYPE-123', sigType: 'wormhole', whType: 'B274' },
+        { sourceSignatureId: 'target-wh-only', sourceSystemId: 'member-2', sourceConnectionId: 'edge-target',
+          sigId: 'WH-123', sigType: 'wormhole', whType: 'B274' },
+      ],
+      connections: [
+        { sourceConnectionId: 'edge-source', fromSourceSystemId: 'member-1', toSourceSystemId: 'member-2',
+          connection_type: 'standard', ship_size: 'large', sourceSignatureId: 'source-type-only' },
+        { sourceConnectionId: 'edge-target', fromSourceSystemId: 'member-1', toSourceSystemId: 'member-2',
+          connection_type: 'standard', ship_size: 'large', targetSignatureId: 'target-wh-only' },
+      ],
+    });
+    const result = await sendTopology(payload);
+    expect(result.status).toBe(200);
+    const conflictFields = result.body.conflicts.map((conflict: any) => `${conflict.itemId}:${conflict.fields.join(',')}`).sort();
+    expect(conflictFields).toEqual([
+      'edge-source:source_signature_id',
+      'edge-target:target_signature_id',
+      'source-type-only:sig_type',
+      'target-wh-only:wh_type',
+    ]);
+    const outcomeFields = [...result.body.outcomes.items.blocked, ...result.body.outcomes.items.preserved]
+      .map((item: any) => `${item.sourceItemId}:${item.fields?.join(',') ?? ''}`).sort();
+    expect(outcomeFields).toEqual([
+      'edge-source:source_signature_id',
+      'edge-target:target_signature_id',
+      'source-type-only:sig_type',
+      'target-wh-only:wh_type',
+    ]);
+
+    const checkpoint = await db.query<{ result_json: Record<string, any> }>(
+      'SELECT result_json FROM wormholesystems_topology_checkpoints WHERE map_id=$1 AND source_identity=$2', [mapId, sourceIdentity]);
+    expect(checkpoint.rows[0].result_json.conflicts).toEqual(result.body.conflicts);
+    expect(checkpoint.rows[0].result_json.outcomes).toEqual(result.body.outcomes);
+    const expectedReplay = structuredClone(result.body);
+    expectedReplay.checkpoint.replayed = true;
+    const replay = await sendTopology(payload);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(expectedReplay);
+  });
+
+  it('reports only changed managed signature fields and uses legacy-compatible reason codes', async () => {
+    const initial = v2Topology({ signatures: [{ sourceSignatureId: 'legacy-owned-signature', sourceSystemId: 'member-1',
+      sourceConnectionId: null, sigId: 'ABC-123', sigType: 'data', whType: '' }] });
+    const initialResult = await sendTopology(initial);
+    expect(initialResult.body.createdSignatures).toBe(1);
+    await db.query(`UPDATE map_signatures SET sig_type='relic', wh_type='C247' WHERE sig_id='ABC-123'`);
+
+    const changedFields = await sendTopology({ ...initial, snapshot: await newerSnapshot(initial.snapshot.fetchedAt) });
+    expect(changedFields.body.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ itemId: 'legacy-owned-signature', reasonCode: 'managed_field_conflict',
+        fields: ['sig_type', 'wh_type'] }),
+    ]));
+    expect(changedFields.body.outcomes.items.preserved).toEqual([
+      { itemKind: 'signature', sourceItemId: 'legacy-owned-signature', reasonCode: 'managed_field_conflict',
+        fields: ['sig_type', 'wh_type'] },
+    ]);
+
+    const otherSource = 'wormholesystems:["https://source.example","legacy-other"]';
+    const otherSourceConflict = await sendTopology(v2Topology({ sourceIdentity: otherSource, signatures: [
+      { sourceSignatureId: 'other-source-signature', sourceSystemId: 'member-1', sourceConnectionId: null,
+        sigId: 'ABC-123', sigType: 'data', whType: '' },
+    ] }));
+    expect(otherSourceConflict.body.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ itemId: 'other-source-signature', reasonCode: 'source_ownership_conflict' }),
+    ]));
+    expect(otherSourceConflict.body.outcomes.items.preserved).toEqual([
+      { itemKind: 'signature', sourceItemId: 'other-source-signature', reasonCode: 'source_ownership_conflict',
+        nexumRowId: initialResult.body.mappings.signatures[0].rowId },
+    ]);
+    expect(JSON.stringify([changedFields.body, otherSourceConflict.body])).not.toMatch(/name_(identity_conflict|ownership_unknown)|manual_name_not_managed/);
+  });
+
+  it('does not label v3 managed signature type drift as a name identity conflict', async () => {
+    const source = 'wormholesystems:["https://source.example","v3-managed-drift"]';
+    const initial = v3Topology('SDE Site Name', { sourceIdentity: source, signatures: [
+      { sourceSignatureId: 'v3-drift-signature', sourceSystemId: 'member-1', sourceConnectionId: null,
+        sigId: 'DRF-303', sigType: 'data', whType: '', name: 'SDE Site Name' },
+    ] });
+    expect((await sendTopology(initial)).body.createdSignatures).toBe(1);
+    await db.query(`UPDATE map_signatures SET sig_type='relic',wh_type='C247'
+      WHERE system_id IN (SELECT id FROM map_systems WHERE map_id=$1) AND sig_id='DRF-303'`, [mapId]);
+
+    const result = await sendTopology({ ...initial, snapshot: await newerSnapshot(initial.snapshot.fetchedAt) });
+
+    expect(result.body.conflicts).toContainEqual(expect.objectContaining({ itemId: 'v3-drift-signature',
+      reasonCode: 'managed_field_conflict', fields: ['sig_type', 'wh_type'] }));
+    expect(result.body.outcomes.items.preserved).toEqual([
+      { itemKind: 'signature', sourceItemId: 'v3-drift-signature', reasonCode: 'managed_field_conflict', fields: ['sig_type', 'wh_type'] },
+    ]);
+    expect(JSON.stringify(result.body)).not.toContain('name_identity_conflict');
+  });
+
+  it('records stable keyed reasons for successful deletes and replays the full committed outcome', async () => {
+    const initial = v2Topology({
+      signatures: [{ sourceSignatureId: 'delete-signature', sourceSystemId: 'member-1', sourceConnectionId: null,
+        sigId: 'DEL-123', sigType: 'data', whType: '' }],
+      connections: [{ sourceConnectionId: 'delete-connection', fromSourceSystemId: 'member-1', toSourceSystemId: 'member-2',
+        connection_type: 'standard', ship_size: 'large' }],
+    });
+    const created = await sendTopology(initial);
+    expect(created.body).toMatchObject({ createdSystems: 2, createdSignatures: 1, createdConnections: 1 });
+    const removedPayload = { ...initial, snapshot: await newerSnapshot(initial.snapshot.fetchedAt), systems: [], signatures: [], connections: [] };
+    const removed = await sendTopology(removedPayload);
+    expect(removed.body).toMatchObject({ deletedSystems: 2, deletedSignatures: 1, deletedConnections: 1,
+      outcomes: { totalsByKind: {
+        system: { deleted: 2 }, signature: { deleted: 1 }, connection: { deleted: 1 },
+      } } });
+    expect(removed.body.outcomes.items.deleted).toEqual([
+      { itemKind: 'connection', sourceItemId: 'delete-connection', reasonCode: 'source_owned_connection_deleted',
+        nexumRowId: created.body.mappings.connections[0].rowId },
+      { itemKind: 'signature', sourceItemId: 'delete-signature', reasonCode: 'source_owned_signature_deleted',
+        nexumRowId: created.body.mappings.signatures[0].rowId },
+      { itemKind: 'system', sourceItemId: 'member-1', reasonCode: 'source_owned_system_deleted',
+        nexumRowId: created.body.mappings.systems.find((mapping: any) => mapping.sourceId === 'member-1').rowId },
+      { itemKind: 'system', sourceItemId: 'member-2', reasonCode: 'source_owned_system_deleted',
+        nexumRowId: created.body.mappings.systems.find((mapping: any) => mapping.sourceId === 'member-2').rowId },
+    ]);
+
+    const checkpoint = await db.query(`SELECT result_json FROM wormholesystems_topology_checkpoints WHERE map_id=$1 AND source_identity=$2`,
+      [mapId, sourceIdentity]);
+    expect(checkpoint.rows[0].result_json.outcomes).toEqual(removed.body.outcomes);
+    const expectedReplay = structuredClone(removed.body);
+    expectedReplay.checkpoint.replayed = true;
+    const replay = await sendTopology(removedPayload);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(expectedReplay);
+    expect((await db.query('SELECT 1 FROM map_systems WHERE map_id=$1', [mapId])).rows).toHaveLength(0);
+    expect((await db.query('SELECT 1 FROM map_connections WHERE map_id=$1', [mapId])).rows).toHaveLength(0);
+    expect((await db.query(`SELECT 1 FROM wormholesystems_topology_ownership WHERE map_id=$1`, [mapId])).rows).toHaveLength(0);
+  });
+
+  it('reports stable affected fields for unresolved scanners and endpoints', async () => {
+    const initial = v2Topology();
+    expect((await sendTopology(initial)).status).toBe(200);
+    await db.query(`UPDATE map_systems SET name='Manual name' WHERE map_id=$1 AND eve_system_id=31000001`, [mapId]);
+    const result = await sendTopology({ ...initial, snapshot: await newerSnapshot(initial.snapshot.fetchedAt),
+      signatures: [{ sourceSignatureId: 'unresolved-scanner-signature', sourceSystemId: 'member-1', sourceConnectionId: null,
+        sigId: 'ABC-123', sigType: 'data', whType: '' }],
+      connections: [
+        { sourceConnectionId: 'unresolved-source-endpoint-connection', fromSourceSystemId: 'member-1', toSourceSystemId: 'member-2',
+          connection_type: 'standard', ship_size: 'large' },
+        { sourceConnectionId: 'unresolved-target-endpoint-connection', fromSourceSystemId: 'member-2', toSourceSystemId: 'member-1',
+          connection_type: 'standard', ship_size: 'large' },
+      ],
+    });
+
+    expect(result.body.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ itemId: 'unresolved-scanner-signature', reasonCode: 'scanner_system_unresolved', fields: ['system_id'] }),
+      expect.objectContaining({ itemId: 'unresolved-source-endpoint-connection', reasonCode: 'dependency_or_identity_conflict',
+        fields: ['source_id'] }),
+      expect.objectContaining({ itemId: 'unresolved-target-endpoint-connection', reasonCode: 'dependency_or_identity_conflict',
+        fields: ['target_id'] }),
+    ]));
+    expect(result.body.outcomes.items.blocked).toEqual(expect.arrayContaining([
+      { itemKind: 'signature', sourceItemId: 'unresolved-scanner-signature', reasonCode: 'scanner_system_unresolved', fields: ['system_id'] },
+      { itemKind: 'connection', sourceItemId: 'unresolved-source-endpoint-connection', reasonCode: 'dependency_or_identity_conflict',
+        fields: ['source_id'] },
+      { itemKind: 'connection', sourceItemId: 'unresolved-target-endpoint-connection', reasonCode: 'dependency_or_identity_conflict',
+        fields: ['target_id'] },
+    ]));
+  });
+
+  it('records skipped deletions for system identity mismatches without counting them as preserved outcomes', async () => {
+    const initial = v2Topology({ systems: [
+      { sourceSystemId: 'ownership-mismatch', eveSystemId: 31_000_001, positionX: 10, positionY: 20 },
+      { sourceSystemId: 'old-member', eveSystemId: 31_000_002, positionX: 30, positionY: 40 },
+    ] });
+    expect((await sendTopology(initial)).body.createdSystems).toBe(2);
+    await db.query(`UPDATE wormholesystems_topology_ownership SET managed_json=jsonb_set(managed_json,'{sourceSystemId}','"unexpected-member"'::jsonb)
+      WHERE map_id=$1 AND source_identity=$2 AND item_kind='system' AND source_item_id='ownership-mismatch'`, [mapId, sourceIdentity]);
+
+    const result = await sendTopology({ ...initial, snapshot: await newerSnapshot(initial.snapshot.fetchedAt), systems: [
+      { sourceSystemId: 'replacement-member', eveSystemId: 31_000_002, positionX: 30, positionY: 40 },
+    ] });
+
+    expect(result.body).toMatchObject({ deletedSystems: 0, checkpoint: { partial: true },
+      outcomes: { totalsByKind: { system: { preserved: 1, skipped_deletion: 2, deleted: 0 } } } });
+    expect(result.body.outcomes.items.skipped_deletion).toEqual(expect.arrayContaining([
+      { itemKind: 'system', sourceItemId: 'ownership-mismatch', reasonCode: 'source_ownership_identity_mismatch', fields: ['source_system_id'] },
+      { itemKind: 'system', sourceItemId: 'old-member', reasonCode: 'source_system_identity_conflict', fields: ['eve_system_id'] },
+    ]));
+    expect(result.body.outcomes.items.preserved.map((item: any) => item.sourceItemId)).toEqual(['replacement-member']);
+    expect(result.body.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ itemId: 'ownership-mismatch', reasonCode: 'source_ownership_identity_mismatch' }),
+      expect.objectContaining({ itemId: 'old-member', reasonCode: 'source_system_identity_conflict' }),
+    ]));
+    expect((await db.query('SELECT 1 FROM map_systems WHERE map_id=$1', [mapId])).rows).toHaveLength(2);
+  });
+
+  it('caps partial outcome arrays canonically and replays the exact committed result without mutation', async () => {
+    const initial = v2Topology({ systems: [
+      { sourceSystemId: 'bulk-conflicted-system', eveSystemId: 31_000_001, positionX: 10, positionY: 20 },
+    ] });
+    expect((await sendTopology(initial)).body.createdSystems).toBe(1);
+    await db.query(`UPDATE map_systems SET name='Manual name' WHERE map_id=$1 AND eve_system_id=31000001`, [mapId]);
+    const payload = { ...initial, snapshot: await newerSnapshot(initial.snapshot.fetchedAt), signatures: Array.from({ length: 300 }, (_, index) => ({
+      sourceSignatureId: `bulk-signature-${String(index).padStart(4, '0')}`, sourceSystemId: 'bulk-conflicted-system',
+      sourceConnectionId: null, sigId: `SIG-${index}`, sigType: 'data', whType: '',
+    })) };
+    const accepted = await sendTopology(payload);
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).toMatchObject({ checkpoint: { accepted: true, replayed: false, partial: true },
+      outcomes: { totalsByKind: { signature: { blocked: 300 }, system: { preserved: 1 } }, omittedByOutcome: { blocked: 44 } } });
+    expect(accepted.body.outcomes.items.blocked).toHaveLength(256);
+    expect(accepted.body.outcomes.items.blocked[0]).toMatchObject({ itemKind: 'signature', sourceItemId: 'bulk-signature-0000' });
+    expect(accepted.body.outcomes.items.blocked.at(-1)).toMatchObject({ itemKind: 'signature', sourceItemId: 'bulk-signature-0255' });
+
+    const systemRowsBefore = await db.query(`SELECT id,eve_system_id,position_x FROM map_systems WHERE map_id=$1 ORDER BY id`, [mapId]);
+    const ownershipBefore = await db.query(`SELECT item_kind,source_item_id,row_id,managed_json FROM wormholesystems_topology_ownership
+      WHERE map_id=$1 ORDER BY item_kind,source_item_id`, [mapId]);
+    const checkpointBefore = await db.query(`SELECT result_json,updated_at FROM wormholesystems_topology_checkpoints
+      WHERE map_id=$1 AND source_identity=$2`, [mapId, sourceIdentity]);
+    const replay = await sendTopology(payload);
+    const expectedReplay = structuredClone(accepted.body);
+    expectedReplay.checkpoint.replayed = true;
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(expectedReplay);
+    expect((await db.query(`SELECT id,eve_system_id,position_x FROM map_systems WHERE map_id=$1 ORDER BY id`, [mapId])).rows)
+      .toEqual(systemRowsBefore.rows);
+    expect((await db.query(`SELECT item_kind,source_item_id,row_id,managed_json FROM wormholesystems_topology_ownership
+      WHERE map_id=$1 ORDER BY item_kind,source_item_id`, [mapId])).rows).toEqual(ownershipBefore.rows);
+    expect((await db.query(`SELECT result_json,updated_at FROM wormholesystems_topology_checkpoints
+      WHERE map_id=$1 AND source_identity=$2`, [mapId, sourceIdentity])).rows).toEqual(checkpointBefore.rows);
+  });
+
+  it('reports stable affected fields for scan-code collisions and ambiguous target signatures', async () => {
+    const initial = v2Topology({ signatures: [{ sourceSignatureId: 'owned-collision-signature', sourceSystemId: 'member-1',
+      sourceConnectionId: null, sigId: 'ABC-123', sigType: 'data', whType: '' }] });
+    expect((await sendTopology(initial)).body.createdSignatures).toBe(1);
+    const systemId = (await db.query<{ id: string }>(`SELECT id FROM map_systems WHERE map_id=$1 AND eve_system_id=31000001`, [mapId])).rows[0].id;
+    await db.query(`INSERT INTO map_signatures (id,system_id,sig_id,sig_type,wh_type)
+      VALUES ($1,$2,'ABC-123','data',''),($3,$2,'DUP-123','data',''),($4,$2,'DUP-123','data','')`,
+    [crypto.randomUUID(), systemId, crypto.randomUUID(), crypto.randomUUID()]);
+
+    const result = await sendTopology({ ...initial, snapshot: await newerSnapshot(initial.snapshot.fetchedAt), signatures: [
+      ...initial.signatures,
+      { sourceSignatureId: 'ambiguous-target-signature', sourceSystemId: 'member-1', sourceConnectionId: null,
+        sigId: 'DUP-123', sigType: 'data', whType: '' },
+    ] });
+    expect(result.body.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ itemId: 'owned-collision-signature', reasonCode: 'signature_code_collision', fields: ['sig_id'] }),
+      expect.objectContaining({ itemId: 'ambiguous-target-signature', reasonCode: 'target_identity_ambiguous', fields: ['sig_id'] }),
+    ]));
+    expect([...result.body.outcomes.items.blocked, ...result.body.outcomes.items.preserved]).toEqual(expect.arrayContaining([
+      { itemKind: 'signature', sourceItemId: 'owned-collision-signature', reasonCode: 'signature_code_collision', fields: ['sig_id'] },
+      { itemKind: 'signature', sourceItemId: 'ambiguous-target-signature', reasonCode: 'target_identity_ambiguous', fields: ['sig_id'] },
+    ]));
+  });
+
+  it('deletes absent owned signatures with WHS notes and protects independent data or references', async () => {
     const payload = v2Topology({ signatures: [
       { sourceSignatureId: 'safe-signature', sourceSystemId: 'member-1', sourceConnectionId: null, sigId: 'ABC-123', sigType: 'data', whType: '' },
-      { sourceSignatureId: 'annotated-signature', sourceSystemId: 'member-2', sourceConnectionId: null, sigId: 'DEF-456', sigType: 'wormhole', whType: 'WH-SYNTH-6' },
+      { sourceSignatureId: 'whs-note-signature', sourceSystemId: 'member-2', sourceConnectionId: null, sigId: 'DEF-456', sigType: 'wormhole', whType: 'WH-SYNTH-6' },
       { sourceSignatureId: 'referenced-signature', sourceSystemId: 'member-1', sourceConnectionId: null, sigId: 'GHI-789', sigType: 'data', whType: '' },
+      { sourceSignatureId: 'guarded-signature', sourceSystemId: 'member-2', sourceConnectionId: null, sigId: 'JKL-012', sigType: 'wormhole', whType: 'WH-SYNTH-6' },
     ] });
-    expect((await sendTopology(payload)).body.createdSignatures).toBe(3);
-    await db.query(`UPDATE map_signatures SET notes='manual',name='manual name' WHERE sig_id='DEF-456'`);
+    expect((await sendTopology(payload)).body.createdSignatures).toBe(4);
+    await db.query(`UPDATE map_signatures SET notes='.0-12 ABC-123 C3 medium',name='stale WHS name' WHERE sig_id='DEF-456'`);
+    await db.query(`UPDATE map_signatures SET wh_leads_to='C2' WHERE sig_id='JKL-012'`);
+    const unownedSystem = (await db.query<{ id: string }>(`SELECT id FROM map_systems WHERE map_id=$1 AND eve_system_id=31000001`, [mapId])).rows[0].id;
+    const unownedSignatureId = crypto.randomUUID();
+    await db.query(`INSERT INTO map_signatures (id,system_id,sig_id,sig_type,notes) VALUES ($1,$2,'MAN-001','data','manual keep')`,
+      [unownedSignatureId, unownedSystem]);
     const referencedSignature = (await db.query<{ id: string; system_id: string }>(
       `SELECT id,system_id FROM map_signatures WHERE sig_id='GHI-789'`)).rows[0];
     const otherSystem = (await db.query<{ id: string }>(`SELECT id FROM map_systems WHERE map_id=$1 AND eve_system_id=31000002`, [mapId])).rows[0].id;
@@ -1247,13 +1801,22 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
       VALUES ($1,$2,$3,$4,'standard',$5)`,
       [crypto.randomUUID(), mapId, referencedSignature.system_id, otherSystem, referencedSignature.id]);
     const removed = await sendTopology({ ...payload, snapshot: await newerSnapshot(payload.snapshot.fetchedAt), signatures: [] });
-    expect(removed.body).toMatchObject({ deletedSignatures: 1, checkpoint: { partial: true }, conflicts: expect.arrayContaining([
-      expect.objectContaining({ itemId: 'annotated-signature', reason: 'removed source signature has manual data, changed fields, or connection references; preserved' }),
-      expect.objectContaining({ itemId: 'referenced-signature', reason: 'removed source signature has manual data, changed fields, or connection references; preserved' }),
+    expect(removed.body).toMatchObject({ deletedSignatures: 2, checkpoint: { partial: true }, conflicts: expect.arrayContaining([
+      expect.objectContaining({ itemId: 'guarded-signature', reason: 'removed source signature has manual data, changed fields, or connection references; preserved',
+        fields: ['wh_leads_to'] }),
+      expect.objectContaining({ itemId: 'referenced-signature', reason: 'removed source signature has manual data, changed fields, or connection references; preserved',
+        fields: ['source_signature_id'] }),
     ]) });
+    expect(removed.body.outcomes.totalsByKind.signature).toMatchObject({ preserved: 0, skipped_deletion: 2, deleted: 2 });
+    expect(removed.body.outcomes.items.preserved.filter((item: any) => ['guarded-signature', 'referenced-signature'].includes(item.sourceItemId))).toEqual([]);
+    expect(removed.body.outcomes.items.skipped_deletion).toEqual(expect.arrayContaining([
+      { itemKind: 'signature', sourceItemId: 'guarded-signature', reasonCode: 'manual_or_managed_change', fields: ['wh_leads_to'] },
+      { itemKind: 'signature', sourceItemId: 'referenced-signature', reasonCode: 'dependent_connection', fields: ['source_signature_id'] },
+    ]));
     expect((await db.query<{ sig_id: string; notes: string }>(`SELECT s.sig_id,s.notes FROM map_signatures s
       JOIN map_systems m ON m.id=s.system_id WHERE m.map_id=$1 ORDER BY s.sig_id`, [mapId])).rows)
-      .toEqual([{ sig_id: 'DEF-456', notes: 'manual' }, { sig_id: 'GHI-789', notes: '' }]);
+      .toEqual([{ sig_id: 'GHI-789', notes: '' }, { sig_id: 'JKL-012', notes: '' }, { sig_id: 'MAN-001', notes: 'manual keep' }]);
+    expect((await db.query(`SELECT 1 FROM map_signatures WHERE id=$1`, [unownedSignatureId])).rows).toHaveLength(1);
     expect((await db.query<{ source_signature_id: string }>(`SELECT source_signature_id FROM map_connections WHERE map_id=$1`, [mapId])).rows)
       .toEqual([{ source_signature_id: referencedSignature.id }]);
   });

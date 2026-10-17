@@ -1066,13 +1066,18 @@ export async function migrate() {
       source_identity TEXT NOT NULL,
       fetched_at      TIMESTAMPTZ NOT NULL,
       payload_digest  TEXT NOT NULL CHECK (payload_digest ~ '^[0-9a-f]{64}$'),
-      schema_version  INTEGER NOT NULL DEFAULT 1 CHECK (schema_version IN (1,2)),
+      schema_version  INTEGER NOT NULL DEFAULT 1 CHECK (schema_version IN (1,2,3)),
       result_json     JSONB,
       updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (map_id, source_identity)
     );
     ALTER TABLE wormholesystems_topology_checkpoints ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE wormholesystems_topology_checkpoints ADD COLUMN IF NOT EXISTS result_json JSONB;
+    -- Expand existing deployments without rewriting accepted checkpoint rows.
+    -- Drop/re-add is idempotent and retains v1/v2 versions and stored results.
+    ALTER TABLE wormholesystems_topology_checkpoints DROP CONSTRAINT IF EXISTS wormholesystems_topology_checkpoints_schema_version_check;
+    ALTER TABLE wormholesystems_topology_checkpoints ADD CONSTRAINT wormholesystems_topology_checkpoints_schema_version_check
+      CHECK (schema_version IN (1,2,3));
 
     -- Login allow-list. Who may sign in to a restricted deployment, beyond the
     -- .env CORP_ID/ALLIANCE_ID core. Each row admits a corp, an alliance, or a
