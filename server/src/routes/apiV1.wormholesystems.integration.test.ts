@@ -884,7 +884,7 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
       reasonCode: 'dependent_anomaly', dependency: { kind: 'anomaly', id: anomalyId } });
   });
 
-  it('deletes absent owned topology when a connection has only endpoint layout handles', async () => {
+  it('deletes absent owned topology despite source-owned system positions and connection endpoint layout handles', async () => {
     const payload = v2Topology({
       signatures: [
         { sourceSignatureId: 'handle-source-signature', sourceSystemId: 'member-1', sourceConnectionId: 'handle-edge',
@@ -902,6 +902,7 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
       JOIN wormholesystems_topology_ownership o ON o.map_id=c.map_id AND o.item_kind='connection' AND o.row_id=c.id
       WHERE c.map_id=$1 AND o.source_item_id='handle-edge'`, [mapId])).rows[0].id;
     await db.query(`UPDATE map_connections SET source_handle='source-layout',target_handle='target-layout' WHERE id=$1`, [connectionId]);
+    await db.query(`UPDATE map_systems SET position_x=position_x+100,position_y=position_y+200 WHERE map_id=$1`, [mapId]);
 
     const removed = await sendTopology({ ...payload, snapshot: await newerSnapshot((payload.snapshot as any).fetchedAt),
       systems: [], signatures: [], connections: [] });
