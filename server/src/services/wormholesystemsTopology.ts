@@ -1007,7 +1007,7 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
         recordSkippedDeletion('system', sourceSystemId, 'source_system_identity_conflict', ['eve_system_id']);
         continue;
       }
-      const changedManagedFields = row ? systemManagedFieldDifferences(managedSystem(row), ownedManagedSystem(managed)) : [];
+      const changedManagedFields = row ? systemManagedFieldDifferences(managedSystem(row), ownedManagedSystem(managed), false) : [];
       const manualGuardFields = row ? manualSystemGuardFields(row) : [];
       const deletionGuardFields = [...new Set([...changedManagedFields, ...manualGuardFields])];
       const related = await client.query<{ kind: string; id: string }>(`SELECT kind,id FROM (
