@@ -884,6 +884,46 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
       reasonCode: 'dependent_anomaly', dependency: { kind: 'anomaly', id: anomalyId } });
   });
 
+  it('deletes absent owned topology when a connection has only endpoint layout handles', async () => {
+    const payload = v2Topology({
+      signatures: [
+        { sourceSignatureId: 'handle-source-signature', sourceSystemId: 'member-1', sourceConnectionId: 'handle-edge',
+          sigId: 'HND-101', sigType: 'wormhole', whType: 'WH-SYNTH-1' },
+        { sourceSignatureId: 'handle-target-signature', sourceSystemId: 'member-2', sourceConnectionId: 'handle-edge',
+          sigId: 'HND-102', sigType: 'wormhole', whType: 'WH-SYNTH-2' },
+      ],
+      connections: [{ sourceConnectionId: 'handle-edge', fromSourceSystemId: 'member-1', toSourceSystemId: 'member-2',
+        connection_type: 'standard', ship_size: 'large', sourceSignatureId: 'handle-source-signature',
+        targetSignatureId: 'handle-target-signature' }],
+    });
+    const created = await sendTopology(payload);
+    expect(created.body).toMatchObject({ createdSystems: 2, createdSignatures: 2, createdConnections: 1 });
+    const connectionId = (await db.query<{ id: string }>(`SELECT c.id FROM map_connections c
+      JOIN wormholesystems_topology_ownership o ON o.map_id=c.map_id AND o.item_kind='connection' AND o.row_id=c.id
+      WHERE c.map_id=$1 AND o.source_item_id='handle-edge'`, [mapId])).rows[0].id;
+    await db.query(`UPDATE map_connections SET source_handle='source-layout',target_handle='target-layout' WHERE id=$1`, [connectionId]);
+
+    const removed = await sendTopology({ ...payload, snapshot: await newerSnapshot((payload.snapshot as any).fetchedAt),
+      systems: [], signatures: [], connections: [] });
+
+    expect(removed.body).toMatchObject({ deletedConnections: 1, deletedSignatures: 2, deletedSystems: 2, conflicts: [] });
+    expect(removed.body.outcomes.items.deleted).toEqual([
+      { itemKind: 'connection', sourceItemId: 'handle-edge', reasonCode: 'source_owned_connection_deleted',
+        nexumRowId: created.body.mappings.connections[0].rowId },
+      { itemKind: 'signature', sourceItemId: 'handle-source-signature', reasonCode: 'source_owned_signature_deleted',
+        nexumRowId: created.body.mappings.signatures.find((mapping: any) => mapping.sourceId === 'handle-source-signature').rowId },
+      { itemKind: 'signature', sourceItemId: 'handle-target-signature', reasonCode: 'source_owned_signature_deleted',
+        nexumRowId: created.body.mappings.signatures.find((mapping: any) => mapping.sourceId === 'handle-target-signature').rowId },
+      { itemKind: 'system', sourceItemId: 'member-1', reasonCode: 'source_owned_system_deleted',
+        nexumRowId: created.body.mappings.systems.find((mapping: any) => mapping.sourceId === 'member-1').rowId },
+      { itemKind: 'system', sourceItemId: 'member-2', reasonCode: 'source_owned_system_deleted',
+        nexumRowId: created.body.mappings.systems.find((mapping: any) => mapping.sourceId === 'member-2').rowId },
+    ]);
+    expect((await db.query(`SELECT 1 FROM map_connections WHERE id=$1`, [connectionId])).rows).toHaveLength(0);
+    expect((await db.query(`SELECT 1 FROM map_signatures WHERE sig_id IN ('HND-101','HND-102')`)).rows).toHaveLength(0);
+    expect((await db.query(`SELECT 1 FROM map_systems WHERE map_id=$1`, [mapId])).rows).toHaveLength(0);
+  });
+
   it('creates source-owned systems with SDE effect and statics', async () => {
     await db.query(`UPDATE solar_systems SET effect='magnetar', statics=ARRAY['C247','X877'] WHERE id=31000001`);
     const result = await sendTopology({
