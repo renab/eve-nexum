@@ -15,6 +15,8 @@ vi.mock('../services/discord.js', () => ({
 
 import { ensureIntegrationDb, truncateAll, seedUser } from '../test/integrationDb.js';
 import { db } from '../db.js';
+import { generateApiKey } from '../utils/apiKeys.js';
+import { apiV1Router } from './apiV1.js';
 import { mapsRouter } from './maps.js';
 
 const dbReady = await ensureIntegrationDb();
@@ -90,6 +92,97 @@ describe.skipIf(!dbReady)('K162 Discord notice vs the scout copy button (integra
     await patchSig(body.id, { whLeadsTo: DEST }).expect(200);
     await settle();
     expect(sent.calls).toHaveLength(1);
+  });
+
+  it('announces only when a human POST fills a blank type with K162', async () => {
+    const { body } = await postSig({ sigId: 'ABC-123', sigType: 'wormhole' }).expect(201);
+    const merged = await postSig({ sigId: 'abc-123', whType: 'K162' }).expect(200);
+    expect(merged.body.id).toBe(body.id);
+    expect(merged.body.whType).toBe('K162');
+    await patchSig(body.id, { whLeadsTo: DEST }).expect(200);
+    await settle();
+    expect(sent.calls).toHaveLength(1);
+    await postSig({ sigId: 'ABC-123', whType: 'K162' }).expect(200);
+    expect(sent.calls).toHaveLength(1);
+  });
+
+  it('does not announce when a competing sync insert wins the K162 race', async () => {
+    // crossMapSync does not take the map-row lock. Hold its inserted signature
+    // uncommitted until the POST is waiting on the unique-index conflict.
+    const syncClient = await db.connect();
+    let inTransaction = false;
+    let post: Promise<unknown> | undefined;
+    try {
+      await syncClient.query('BEGIN');
+      inTransaction = true;
+      const inserted = await syncClient.query<{ id: string }>(
+        `INSERT INTO map_signatures (system_id, sig_id, sig_type, wh_type, wh_leads_to, created_by_user_id)
+         VALUES ($1, 'ABC-123', 'wormhole', 'K162', $2, $3) RETURNING id`,
+        [sysId, DEST, user],
+      );
+      post = postSig({ sigId: 'abc-123', sigType: 'wormhole', whType: 'K162' })
+        .expect(200).then(response => response);
+
+      let waiting = false;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const { rows } = await db.query(
+          `SELECT 1 FROM pg_stat_activity
+           WHERE pid <> pg_backend_pid() AND wait_event = 'transactionid'
+             AND query LIKE '%INSERT INTO map_signatures%' LIMIT 1`,
+        );
+        if (rows.length) { waiting = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      expect(waiting, 'POST must reach the conflicting upsert before sync commits').toBe(true);
+      await syncClient.query('COMMIT');
+      inTransaction = false;
+
+      const response = await post as { body: { id: string; whType: string } };
+      expect(response.body.id).toBe(inserted.rows[0].id);
+      expect(response.body.whType).toBe('K162');
+      await patchSig(response.body.id, { whLeadsTo: DEST }).expect(200);
+      await settle();
+      expect(sent.calls).toHaveLength(0);
+    } finally {
+      if (inTransaction) await syncClient.query('ROLLBACK');
+      syncClient.release();
+      if (post) await post.catch(() => undefined);
+    }
+  });
+
+  it('announces when an API-key POST fills a blank type with K162', async () => {
+    const { body } = await postSig({ sigId: 'ABC-123', sigType: 'wormhole' }).expect(201);
+    const ownerId = (await db.query<{ id: number }>(`INSERT INTO owners DEFAULT VALUES RETURNING id`)).rows[0].id;
+    await db.query(`UPDATE users SET owner_id = $1 WHERE id = $2`, [ownerId, user]);
+    const key = generateApiKey();
+    await db.query(`INSERT INTO api_tokens (owner_id, context_user_id, token_hash, token_prefix, name, scope)
+      VALUES ($1, $2, $3, $4, 'Test', 'write')`, [ownerId, user, key.hash, key.prefix]);
+    const app = express();
+    app.use(express.json());
+    app.use('/api/v1', apiV1Router);
+    const merged = await request(app).post(`/api/v1/maps/${mapId}/systems/${sysId}/signatures`)
+      .set('Authorization', `Bearer ${key.raw}`).send({ sigId: 'ABC-123', whType: 'K162' }).expect(200);
+    expect(merged.body.id).toBe(body.id);
+    await patchSig(body.id, { whLeadsTo: DEST }).expect(200);
+    await settle();
+    expect(sent.calls).toHaveLength(1);
+  });
+
+  it('does not announce a scout POST that fills a blank type with K162', async () => {
+    const { body } = await postSig({ sigId: 'ABC-123', sigType: 'wormhole' }).expect(201);
+    await postSig({ sigId: 'ABC-123', whType: 'K162', scoutConnectionId: '75570' }).expect(200);
+    await patchSig(body.id, { whLeadsTo: DEST }).expect(200);
+    await settle();
+    expect(sent.calls).toHaveLength(0);
+  });
+
+  it('does not announce a POST whose K162 cannot replace an existing type', async () => {
+    const { body } = await postSig({ sigId: 'ABC-123', sigType: 'wormhole', whType: 'B449' }).expect(201);
+    const merged = await postSig({ sigId: 'ABC-123', whType: 'K162' }).expect(200);
+    expect(merged.body.whType).toBe('B449');
+    await patchSig(body.id, { whLeadsTo: DEST }).expect(200);
+    await settle();
+    expect(sent.calls).toHaveLength(0);
   });
 
   it('stays quiet for a K162 the Thera/Turnur copy button wrote', async () => {

@@ -1427,7 +1427,10 @@
     "createShareFailed": "No se pudo crear el enlace de compartir",
     "createShareLink": "Crear enlace de compartir",
     "crossMapSync": "Sincronizar datos del sistema entre mis mapas",
-    "crossMapSyncHelp": "Cuando añades o editas firmas y anomalías en un sistema, se copian al mismo sistema en tus otros mapas (los mapas personales se sincronizan con tus otros mapas personales; los de corp con los demás mapas de la corp). No destructivo: solo rellena entradas que faltan o están vacías — nunca sobrescribe datos que ya hayas introducido ni borra nada.",
+    "crossMapSyncHelp": "Cuando añades o editas firmas y anomalías en un sistema, se copian al mismo sistema en tus otros mapas personales, incluidos los de tus otros personajes. Los mapas de corporación y de alianza tienen su propio interruptor. No destructivo: solo rellena entradas que faltan o están vacías — nunca sobrescribe ni borra datos que ya hayas introducido.",
+    "crossMapSyncOrg": "Sincronizar datos del sistema con otros mapas",
+    "crossMapSyncCorpHelp": "Las firmas y anomalías añadidas o editadas aquí se copian al mismo sistema en los demás mapas de la corporación que también tengan esto activado. No destructivo: solo rellena entradas que faltan o están vacías. Solo el propietario/los administradores pueden cambiarlo.",
+    "crossMapSyncAllianceHelp": "Las firmas y anomalías añadidas o editadas aquí se copian al mismo sistema en los demás mapas de la alianza que también tengan esto activado. No destructivo: solo rellena entradas que faltan o están vacías. Solo los administradores de la alianza pueden cambiarlo.",
     "easyConnect": "Conexión fácil",
     "edgeStyle": {
       "bezier": "Estándar",
@@ -1831,6 +1834,7 @@
     "pasteDifferentSystem": "Tu personaje está actualmente en {{current}}, pero estás pegando firmas en {{selected}}. ¿Continuar?",
     "loadFailed": "No se pudieron cargar las firmas",
     "saveFailed": "No se pudo guardar la firma",
+    "duplicateId": "La firma {{id}} ya existe en este sistema",
     "deleteFailed": "No se pudo eliminar la firma",
     "deleteSelectedConfirm_one": "¿Eliminar {{count}} firma seleccionada?",
     "deleteSelectedConfirm_other": "¿Eliminar {{count}} firmas seleccionadas?",
@@ -2213,5 +2217,9 @@
     "max": "Hasta {{count}} plantillas",
     "orgGroup": "Organización",
     "mineGroup": "Mías"
+  },
+  "orgLogos": {
+    "alliance": "Logo de la alianza",
+    "corp": "Logo de la corporación"
   }
 }

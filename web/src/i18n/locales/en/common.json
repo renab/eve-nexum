@@ -1432,7 +1432,10 @@
     "createShareFailed": "Failed to create share link",
     "createShareLink": "Create share link",
     "crossMapSync": "Sync system data across my maps",
-    "crossMapSyncHelp": "When you add or edit signatures and anomalies on a system, copy them to the same system on your other maps (personal maps sync with your other personal maps; corp maps with the corp's other maps). Non-destructive: it only fills in missing or blank entries — it never overwrites data you've already entered or deletes anything.",
+    "crossMapSyncHelp": "When you add or edit signatures and anomalies on a system, copy them to the same system on your other personal maps, including your other characters' maps. Corp and alliance maps have their own switch. Non-destructive: it only fills in missing or blank entries — it never overwrites data you've already entered or deletes anything.",
+    "crossMapSyncOrg": "Sync system data with other maps",
+    "crossMapSyncCorpHelp": "Signatures and anomalies added or edited here are copied to the same system on the corp's other maps that also have this on. Non-destructive: it only fills in missing or blank entries. Only owner/admins can change this.",
+    "crossMapSyncAllianceHelp": "Signatures and anomalies added or edited here are copied to the same system on the alliance's other maps that also have this on. Non-destructive: it only fills in missing or blank entries. Only alliance admins can change this.",
     "easyConnect": "Easy Connect",
     "edgeStyle": {
       "bezier": "Standard",
@@ -1836,6 +1839,7 @@
     "pasteDifferentSystem": "Your character is currently in {{current}}, but you are pasting signatures into {{selected}}. Continue?",
     "loadFailed": "Failed to load signatures",
     "saveFailed": "Failed to save signature",
+    "duplicateId": "Signature {{id}} already exists in this system",
     "deleteFailed": "Failed to delete signature",
     "deleteSelectedConfirm_one": "Delete {{count}} selected signature?",
     "deleteSelectedConfirm_other": "Delete {{count}} selected signatures?",
@@ -2218,5 +2222,9 @@
     "max": "Up to {{count}} presets",
     "orgGroup": "Org",
     "mineGroup": "Mine"
+  },
+  "orgLogos": {
+    "alliance": "Alliance logo",
+    "corp": "Corporation logo"
   }
 }

@@ -1761,23 +1761,33 @@ describe.skipIf(!dbReady)('WormholeSystems API key topology reconciliation (inte
       sourceConnectionId: null, sigId: 'ABC-123', sigType: 'data', whType: '' }] });
     expect((await sendTopology(initial)).body.createdSignatures).toBe(1);
     const systemId = (await db.query<{ id: string }>(`SELECT id FROM map_systems WHERE map_id=$1 AND eve_system_id=31000001`, [mapId])).rows[0].id;
-    await db.query(`INSERT INTO map_signatures (id,system_id,sig_id,sig_type,wh_type)
-      VALUES ($1,$2,'ABC-123','data',''),($3,$2,'DUP-123','data',''),($4,$2,'DUP-123','data','')`,
-    [crypto.randomUUID(), systemId, crypto.randomUUID(), crypto.randomUUID()]);
+    const legacySignatureIds = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
+    // Only this throwaway database can represent the pre-uniqueness legacy rows.
+    // Remove the injected rows and restore the production index even if an assertion fails.
+    await db.query('DROP INDEX uq_map_signatures_system_sig');
+    try {
+      await db.query(`INSERT INTO map_signatures (id,system_id,sig_id,sig_type,wh_type)
+        VALUES ($1,$4,'ABC-123','data',''),($2,$4,'DUP-123','data',''),($3,$4,'DUP-123','data','')`,
+      [...legacySignatureIds, systemId]);
 
-    const result = await sendTopology({ ...initial, snapshot: await newerSnapshot(initial.snapshot.fetchedAt), signatures: [
-      ...initial.signatures,
-      { sourceSignatureId: 'ambiguous-target-signature', sourceSystemId: 'member-1', sourceConnectionId: null,
-        sigId: 'DUP-123', sigType: 'data', whType: '' },
-    ] });
-    expect(result.body.conflicts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ itemId: 'owned-collision-signature', reasonCode: 'signature_code_collision', fields: ['sig_id'] }),
-      expect.objectContaining({ itemId: 'ambiguous-target-signature', reasonCode: 'target_identity_ambiguous', fields: ['sig_id'] }),
-    ]));
-    expect([...result.body.outcomes.items.blocked, ...result.body.outcomes.items.preserved]).toEqual(expect.arrayContaining([
-      { itemKind: 'signature', sourceItemId: 'owned-collision-signature', reasonCode: 'signature_code_collision', fields: ['sig_id'] },
-      { itemKind: 'signature', sourceItemId: 'ambiguous-target-signature', reasonCode: 'target_identity_ambiguous', fields: ['sig_id'] },
-    ]));
+      const result = await sendTopology({ ...initial, snapshot: await newerSnapshot(initial.snapshot.fetchedAt), signatures: [
+        ...initial.signatures,
+        { sourceSignatureId: 'ambiguous-target-signature', sourceSystemId: 'member-1', sourceConnectionId: null,
+          sigId: 'DUP-123', sigType: 'data', whType: '' },
+      ] });
+      expect(result.body.conflicts).toEqual(expect.arrayContaining([
+        expect.objectContaining({ itemId: 'owned-collision-signature', reasonCode: 'signature_code_collision', fields: ['sig_id'] }),
+        expect.objectContaining({ itemId: 'ambiguous-target-signature', reasonCode: 'target_identity_ambiguous', fields: ['sig_id'] }),
+      ]));
+      expect([...result.body.outcomes.items.blocked, ...result.body.outcomes.items.preserved]).toEqual(expect.arrayContaining([
+        { itemKind: 'signature', sourceItemId: 'owned-collision-signature', reasonCode: 'signature_code_collision', fields: ['sig_id'] },
+        { itemKind: 'signature', sourceItemId: 'ambiguous-target-signature', reasonCode: 'target_identity_ambiguous', fields: ['sig_id'] },
+      ]));
+    } finally {
+      await db.query('DELETE FROM map_signatures WHERE id = ANY($1::uuid[])', [legacySignatureIds]);
+      await db.query(`CREATE UNIQUE INDEX uq_map_signatures_system_sig
+        ON map_signatures (system_id, UPPER(sig_id)) WHERE sig_id <> ''`);
+    }
   });
 
   it('deletes absent owned signatures with WHS notes and protects independent data or references', async () => {

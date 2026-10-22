@@ -58,6 +58,12 @@ function logIfContentless(mapId: string, systemId: string, d: SignatureInput, ac
   }));
 }
 
+/** Thrown by updateSignature when the new scan id is already used by another
+ *  signature in the same system. Routes answer it with a 409. */
+export class DuplicateSignatureError extends Error {
+  constructor() { super('A signature with that ID already exists in this system'); }
+}
+
 export async function createSignature(mapId: string, systemId: string, d: SignatureInput, actor: WriteActor) {
   logIfContentless(mapId, systemId, d, actor);
   // Returns the creator alongside the row. The client inserts this response
@@ -66,33 +72,68 @@ export async function createSignature(mapId: string, systemId: string, d: Signat
   // like the row had no author rather than like a missing field.
   // A CTE rather than a second round trip: the id is only known after the
   // insert, and the join is on a user we already have the id for.
-  const rows = await withMapRowLock(mapId, async client => {
+  // The scan id is unique per system (uq_map_signatures_system_sig), so a
+  // create for an id that is already there -- two pilots pasting the same scan
+  // a moment apart -- lands on the existing row instead, filling only its
+  // empty fields (as a paste onto a known sig does) and leaving the author.
+  // `inserted` tells the two apart; xmax is 0 only on a freshly inserted row.
+  const incomingK162 = d.whType.toUpperCase() === 'K162';
+  const { rows, dispatchK162 } = await withMapRowLock(mapId, async client => {
     const { rows } = await client.query(
       `WITH ins AS (
        INSERT INTO map_signatures (system_id, sig_id, sig_type, name, notes, wh_type, wh_leads_to, ghost_type, mass_status, time_status, created_by_user_id,
                                    scout_connection_id, scout_last_seen)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                $12, CASE WHEN $12::text IS NULL THEN NULL ELSE NOW() END)
-       RETURNING *
+       ON CONFLICT (system_id, UPPER(sig_id)) WHERE sig_id <> '' DO UPDATE SET
+         sig_type    = CASE WHEN map_signatures.sig_type    = 'unknown' THEN EXCLUDED.sig_type    ELSE map_signatures.sig_type    END,
+         name        = CASE WHEN map_signatures.name        = ''        THEN EXCLUDED.name        ELSE map_signatures.name        END,
+         notes       = CASE WHEN map_signatures.notes       = ''        THEN EXCLUDED.notes       ELSE map_signatures.notes       END,
+          wh_type     = CASE WHEN map_signatures.wh_type     = ''        THEN CASE WHEN $13::boolean THEN '' ELSE EXCLUDED.wh_type END ELSE map_signatures.wh_type END,
+         wh_leads_to = CASE WHEN map_signatures.wh_leads_to = ''        THEN EXCLUDED.wh_leads_to ELSE map_signatures.wh_leads_to END,
+         ghost_type  = CASE WHEN map_signatures.ghost_type  = ''        THEN EXCLUDED.ghost_type  ELSE map_signatures.ghost_type  END,
+         mass_status = CASE WHEN map_signatures.mass_status = ''        THEN EXCLUDED.mass_status ELSE map_signatures.mass_status END,
+         time_status = CASE WHEN map_signatures.time_status = ''        THEN EXCLUDED.time_status ELSE map_signatures.time_status END,
+         updated_at  = NOW()
+       RETURNING *, (xmax = 0) AS inserted
      )
-     SELECT ins.id, ins.sig_id AS "sigId", ins.sig_type AS "sigType", ins.name, ins.notes,
+     SELECT ins.inserted, ins.id, ins.sig_id AS "sigId", ins.sig_type AS "sigType", ins.name, ins.notes,
             ins.wh_type AS "whType", ins.wh_leads_to AS "whLeadsTo",
             ins.ghost_type AS "ghostType", ins.mass_status AS "massStatus",
             ins.time_status AS "timeStatus", ins.created_at AS "createdAt",
             u.character_name AS "createdByName", u.character_id AS "createdByCharId"
         FROM ins LEFT JOIN users u ON u.id = ins.created_by_user_id`,
       [systemId, d.sigId, d.sigType, d.name, d.notes, d.whType, d.whLeadsTo, d.ghostType,
-       d.massStatus, d.timeStatus, actor.userId, d.scoutConnectionId ?? null],
+       d.massStatus, d.timeStatus, actor.userId, d.scoutConnectionId ?? null, incomingK162],
+     );
+    // The upsert waits for any competing insert of this scan ID. Only this
+    // transaction's transition from blank to K162 earns a notification.
+    let dispatchK162 = incomingK162 && rows[0].inserted && rows[0].whType.toUpperCase() === 'K162';
+    if (incomingK162 && !rows[0].inserted) {
+      const transitioned = await client.query<{ wh_type: string }>(
+        `UPDATE map_signatures SET wh_type = $1, updated_at = NOW()
+         WHERE id = $2 AND wh_type = '' RETURNING wh_type`,
+        [d.whType, rows[0].id],
     );
-    return rows;
+      if (transitioned.rows.length) {
+        rows[0].whType = transitioned.rows[0].wh_type;
+        dispatchK162 = true;
+      }
+    }
+    return { rows, dispatchK162 };
   });
-  db.query(`INSERT INTO user_events (user_id, event_type, sig_type) VALUES ($1, 'signature', $2)`,
-    [actor.userId, d.sigType]).catch(console.error);
+  const { inserted, ...row } = rows[0] as { inserted: boolean } & Record<string, unknown> & { id: string };
+  // Scan stats count signatures found, so a create that merged into an
+  // existing row isn't another one.
+  if (inserted) {
+    db.query(`INSERT INTO user_events (user_id, event_type, sig_type) VALUES ($1, 'signature', $2)`,
+      [actor.userId, d.sigType]).catch(console.error);
+  }
   bumpActivity(systemId);
   recordGhostSiteIfMatch(systemId, d.name);
   publishToMap(mapId, { type: 'sig.changed', actor: actor.clientId, systemId });
-  syncSignature(mapId, systemId, rows[0].id, actor.userId);
-  return rows[0];
+  syncSignature(mapId, systemId, row.id, actor.userId);
+  return { row, inserted, dispatchK162 };
 }
 
 const SIG_COLS: Record<string, string> = {
@@ -133,23 +174,29 @@ export async function updateSignature(
   if ('scoutConnectionId' in updates && updates.scoutConnectionId != null) {
     sets.push('scout_last_seen = NOW()');
   }
-  prevWasK162 = await withMapRowLock(mapId, async client => {
-    if (settingK162) {
-      const { rows: prev } = await client.query<{ wh_type: string | null }>(
-        `SELECT wh_type FROM map_signatures WHERE id = $1 AND system_id = $2`, [sigId, systemId]);
-      const wasK162 = (prev[0]?.wh_type ?? '').toUpperCase() === 'K162';
+  try {
+    prevWasK162 = await withMapRowLock(mapId, async client => {
+      if (settingK162) {
+        const { rows: prev } = await client.query<{ wh_type: string | null }>(
+          `SELECT wh_type FROM map_signatures WHERE id = $1 AND system_id = $2`, [sigId, systemId]);
+        const wasK162 = (prev[0]?.wh_type ?? '').toUpperCase() === 'K162';
+        await client.query(
+          `UPDATE map_signatures SET ${sets.join(', ')} WHERE id = $${vals.length + 1} AND system_id = $${vals.length + 2} AND ${inThisMap(vals.length + 3)}`,
+          [...vals, sigId, systemId, mapId],
+        );
+        return wasK162;
+      }
       await client.query(
         `UPDATE map_signatures SET ${sets.join(', ')} WHERE id = $${vals.length + 1} AND system_id = $${vals.length + 2} AND ${inThisMap(vals.length + 3)}`,
         [...vals, sigId, systemId, mapId],
       );
-      return wasK162;
-    }
-    await client.query(
-      `UPDATE map_signatures SET ${sets.join(', ')} WHERE id = $${vals.length + 1} AND system_id = $${vals.length + 2} AND ${inThisMap(vals.length + 3)}`,
-      [...vals, sigId, systemId, mapId],
-    );
-    return false;
-  });
+      return false;
+    });
+  } catch (err) {
+    const e = err as { code?: string; constraint?: string };
+    if (e.code === '23505' && e.constraint === 'uq_map_signatures_system_sig') throw new DuplicateSignatureError();
+    throw err;
+  }
   bumpActivity(systemId);
   if (typeof updates.name === 'string') recordGhostSiteIfMatch(systemId, updates.name);
   publishToMap(mapId, { type: 'sig.changed', actor: actor.clientId, systemId });

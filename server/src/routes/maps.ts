@@ -29,7 +29,7 @@ import { sdeSystemFacts } from '../services/sdeFacts.js';
 import { contributorIsAtSystem, contributorMayLinkSystems } from '../services/contributorMovement.js';
 import { listConnectionJumps, recordConnectionJump, setConnectionJumpHot, clearConnectionJumps } from '../services/connectionJumps.js';
 import {
-  createSignature, updateSignature, deleteSignature,
+  createSignature, updateSignature, deleteSignature, DuplicateSignatureError,
   createAnomaly, updateAnomaly, deleteAnomaly,
   createStructure, updateStructure, deleteStructure,
 } from '../services/mapWrite.js';
@@ -2172,7 +2172,8 @@ mapsRouter.post('/import/tripwire', async (req, res) => {
     if (sigPh.length > 0) {
       await client.query(
         `INSERT INTO map_signatures (id, system_id, sig_id, sig_type, name, created_by_user_id)
-         VALUES ${sigPh.join(',')}`,
+         VALUES ${sigPh.join(',')}
+         ON CONFLICT (system_id, UPPER(sig_id)) WHERE sig_id <> '' DO NOTHING`,
         sigVals,
       );
     }
@@ -2521,7 +2522,8 @@ mapsRouter.post('/:mapId/merge', async (req, res) => {
       if (sigPh.length > 0) {
         await client.query(
           `INSERT INTO map_signatures (system_id, sig_id, sig_type, name, notes, wh_type, wh_leads_to, ghost_type, created_by_user_id, from_merge)
-           VALUES ${sigPh.join(',')}`, sigVals,
+           VALUES ${sigPh.join(',')}
+           ON CONFLICT (system_id, UPPER(sig_id)) WHERE sig_id <> '' DO NOTHING`, sigVals,
         );
       }
     }
@@ -2748,9 +2750,10 @@ mapsRouter.post('/:mapId/presence', async (req, res) => {
 // toggle merge-source eligibility (corp maps, full/admin only)
 mapsRouter.patch('/:mapId', async (req, res) => {
   const { mapId } = req.params;
-  const { name, locked, allowAsMergeSource, allowAsMergeDestination, lazyRemoveWormholes, collapseGraceHours, bookmarkFormat, siteBookmarkFormat, skipKspace } = req.body as {
+  const { name, locked, allowAsMergeSource, allowAsMergeDestination, lazyRemoveWormholes, collapseGraceHours, bookmarkFormat, siteBookmarkFormat, skipKspace, crossMapSync } = req.body as {
     name?: string; locked?: boolean; allowAsMergeSource?: boolean; allowAsMergeDestination?: boolean;
     lazyRemoveWormholes?: boolean; collapseGraceHours?: number; bookmarkFormat?: string | null; siteBookmarkFormat?: string | null; skipKspace?: boolean;
+    crossMapSync?: boolean;
   };
 
   const access = await requireMapWrite(res, mapId, req);
@@ -2823,6 +2826,20 @@ mapsRouter.patch('/:mapId', async (req, res) => {
     }
     sets.push(`skip_kspace = $${vals.length + 1}`); vals.push(skipKspace === true);
   }
+  // Cross-map sync opt-in -- corp/alliance maps only, gated like the K-space
+  // policy above. Personal maps sync on the owner's own nexum.crossMapSync
+  // setting instead (see services/crossMapSync.ts).
+  if (crossMapSync !== undefined) {
+    if (access.corpId === null && access.allianceId === null) {
+      res.status(400).json({ error: 'Only corp/alliance maps have a cross-map sync setting' }); return;
+    }
+    const role = req.session.role ?? 'readonly';
+    const allianceScoped = access.allianceId !== null;
+    if (allianceScoped ? !isAllianceAdmin(role) : !isAdmin(role)) {
+      res.status(403).json({ error: allianceScoped ? 'Alliance admin access required' : 'Admin access required' }); return;
+    }
+    sets.push(`cross_map_sync = $${vals.length + 1}`); vals.push(crossMapSync === true);
+  }
   // Lazy WH-removal opt-in: a plain per-map behaviour toggle any editor can set
   // (no corp/admin gate). The sweep itself runs server-side on this cadence.
   if (lazyRemoveWormholes !== undefined) {
@@ -2891,6 +2908,7 @@ mapsRouter.patch('/:mapId', async (req, res) => {
       ...(allowAsMergeSource !== undefined ? { allowAsMergeSource: allowAsMergeSource === true } : {}),
       ...(allowAsMergeDestination !== undefined ? { allowAsMergeDestination: allowAsMergeDestination === true } : {}),
       ...(skipKspace !== undefined ? { skipKspace: skipKspace === true } : {}),
+      ...(crossMapSync !== undefined ? { crossMapSync: crossMapSync === true } : {}),
       ...(lazyRemoveWormholes !== undefined ? { lazyRemoveWormholes: lazyRemoveWormholes === true } : {}),
       ...(normalizedGrace !== undefined ? { collapseGraceHours: normalizedGrace } : {}),
       ...(normalizedBookmarkFmt !== undefined ? { bookmarkFormat: normalizedBookmarkFmt } : {}),
@@ -4247,7 +4265,7 @@ mapsRouter.post('/:mapId/systems/:systemId/signatures', async (req, res) => {
   // Read separately so widening the cast doesn't make every field nullable.
   const scoutConnectionId = (req.body as { scoutConnectionId?: unknown }).scoutConnectionId;
   const me = authUser(req);
-  const row = await createSignature(
+  const { row, inserted, dispatchK162: shouldDispatch } = await createSignature(
     mapId, systemId, { sigId, sigType, name, notes, whType, whLeadsTo, ghostType, massStatus, timeStatus,
       scoutConnectionId: typeof scoutConnectionId === 'string' && scoutConnectionId ? scoutConnectionId : null },
     { userId: me.userId, clientId: req.get('x-client-id') ?? null },
@@ -4257,10 +4275,11 @@ mapsRouter.post('/:mapId/systems/:systemId/signatures', async (req, res) => {
   // row as they press the button. Half of a bulk copy is K162 by definition
   // (every hole is K162 at one end), so dispatching here would fire a notice
   // per connection. Suppressed on provenance, like the other bulk writes.
-  if (!fromScoutFeed(scoutConnectionId) && (whType ?? '').toUpperCase() === 'K162') {
+  // A merge also counts if it fills a previously blank wormhole type.
+  if (shouldDispatch && !fromScoutFeed(scoutConnectionId)) {
     dispatchK162(access, row.id, systemId, me.characterName);
   }
-  res.status(201).json(row);
+  res.status(inserted ? 201 : 200).json(row);
 });
 
 mapsRouter.patch('/:mapId/systems/:systemId/signatures/:sigId', async (req, res) => {
@@ -4271,9 +4290,16 @@ mapsRouter.patch('/:mapId/systems/:systemId/signatures/:sigId', async (req, res)
 
   const updates = req.body as Record<string, unknown>;
   const me = authUser(req);
-  const { dispatchK162: shouldDispatch, flushK162: shouldFlush } = await updateSignature(
-    mapId, systemId, sigId, updates, { userId: me.userId, clientId: req.get('x-client-id') ?? null },
-  );
+  let result;
+  try {
+    result = await updateSignature(
+      mapId, systemId, sigId, updates, { userId: me.userId, clientId: req.get('x-client-id') ?? null },
+    );
+  } catch (err) {
+    if (err instanceof DuplicateSignatureError) { res.status(409).json({ error: 'duplicate_sig', message: err.message }); return; }
+    throw err;
+  }
+  const { dispatchK162: shouldDispatch, flushK162: shouldFlush } = result;
   // Discord notice fires once on a transition into K162; flush any pending
   // notice the moment the leads-to is known. (Both decided inside updateSignature.)
   // See the POST above for why a feed-sourced K162 does not notify. A flush
