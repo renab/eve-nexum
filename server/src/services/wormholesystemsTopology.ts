@@ -230,8 +230,9 @@ const systemManagedFieldDifferences = (actual: Record<string, unknown>, expected
 const connectionManagedFieldDifferences = (row: Record<string, unknown>, expected: Record<string, unknown>, includeSignatureRefs: boolean) =>
   differingManagedFields(managedConnection(row, includeSignatureRefs), expected,
     includeSignatureRefs ? connectionManagedFields : connectionManagedFields.slice(0, 4));
-const manualConnectionGuardFields = (row: Record<string, unknown>, includeSignatureRefs = true) => [
-  ...(row.source_handle ? ['source_handle'] : []), ...(row.target_handle ? ['target_handle'] : []),
+const manualConnectionGuardFields = (row: Record<string, unknown>, includeSignatureRefs = true, includeEndpointHandles = true) => [
+  ...(includeEndpointHandles && row.source_handle ? ['source_handle'] : []),
+  ...(includeEndpointHandles && row.target_handle ? ['target_handle'] : []),
   ...(row.mass_status ? ['mass_status'] : []), ...(row.time_status ? ['time_status'] : []), ...(row.wh_type ? ['wh_type'] : []),
   ...(row.flag_icon ? ['flag_icon'] : []), ...(row.flag_note ? ['flag_note'] : []), ...(row.flag_blink ? ['flag_blink'] : []),
   ...(row.flag_color ? ['flag_color'] : []), ...(Number(row.mass_used) !== 0 ? ['mass_used'] : []),
@@ -897,7 +898,9 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
         ...(input.schemaVersion >= 2 ? { sourceSignatureRowId: managed.sourceSignatureRowId ?? null,
           targetSignatureRowId: managed.targetSignatureRowId ?? null } : {}) };
       const changedManagedFields = row ? connectionManagedFieldDifferences(row, expectedManaged, input.schemaVersion >= 2) : [];
-      const manualGuardFields = row ? manualConnectionGuardFields(row, input.schemaVersion < 2) : [];
+      // Endpoint handles are layout metadata, not independent manual content;
+      // they must not pin an exactly verified source-owned absent edge.
+      const manualGuardFields = row ? manualConnectionGuardFields(row, input.schemaVersion < 2, false) : [];
       const deletionGuardFields = [...new Set([...changedManagedFields, ...manualGuardFields])];
       const dependency = dependent.rows[0];
       if (!row || deletionGuardFields.length || dependency) {
@@ -1004,7 +1007,7 @@ export async function reconcileWormholesystemsTopology(mapId: string, raw: unkno
         recordSkippedDeletion('system', sourceSystemId, 'source_system_identity_conflict', ['eve_system_id']);
         continue;
       }
-      const changedManagedFields = row ? systemManagedFieldDifferences(managedSystem(row), ownedManagedSystem(managed)) : [];
+      const changedManagedFields = row ? systemManagedFieldDifferences(managedSystem(row), ownedManagedSystem(managed), false) : [];
       const manualGuardFields = row ? manualSystemGuardFields(row) : [];
       const deletionGuardFields = [...new Set([...changedManagedFields, ...manualGuardFields])];
       const related = await client.query<{ kind: string; id: string }>(`SELECT kind,id FROM (
